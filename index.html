@@ -1,0 +1,61 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover" />
+  <meta name="theme-color" content="#0a4d90" />
+  <meta name="apple-mobile-web-app-capable" content="yes" />
+  <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
+  <link rel="apple-touch-icon" href="icon.svg" />
+  <title>Yugioh Setcode Scanner</title>
+  <link rel="manifest" href="manifest.json" />
+  <link rel="stylesheet" href="styles.css" />
+</head>
+<body>
+  <main>
+    <header>
+      <h1>Yugioh Setcode Scanner</h1>
+      <p>Scan a Yu-Gi-Oh! TCG card with your iPhone camera, extract the set code, and export it to Excel.</p>
+    </header>
+
+    <section class="camera-panel">
+      <div class="controls">
+        <button id="openCameraBtn">Open Camera</button>
+        <button id="captureBtn" disabled>Scan Card</button>
+        <button id="uploadBtn">Upload Image</button>
+        <button id="exportBtn">Export CSV</button>
+        <button id="clearBtn">Clear Sheet</button>
+      </div>
+
+      <input id="fileInput" type="file" accept="image/*" capture="environment" hidden />
+
+      <div class="preview">
+        <video id="video" playsinline autoplay muted></video>
+        <canvas id="canvas" hidden></canvas>
+      </div>
+
+      <div class="status-card">
+        <h2>Scan Result</h2>
+        <div id="scanResult" class="result">No scan yet.</div>
+        <div id="status" class="status">Ready.</div>
+      </div>
+    </section>
+
+    <section class="entries-panel">
+      <h2>Scanned Set Codes</h2>
+      <div class="table-wrapper">
+        <table id="entriesTable">
+          <thead>
+            <tr><th>#</th><th>Set Code</th><th>Edition</th><th>Count</th><th>Card Name</th><th>Raw Text</th><th>Last Scanned</th></tr>
+          </thead>
+          <tbody></tbody>
+        </table>
+      </div>
+      <p class="note">The export is saved as a CSV file that can be opened in Excel and includes edition and duplicate counts. On iPhone 14, use Upload Image if camera access is blocked.</p>
+    </section>
+  </main>
+
+  <script src="https://cdn.jsdelivr.net/npm/tesseract.js@4.1.2/dist/tesseract.min.js"></script>
+  <script src="app.js" defer></script>
+</body>
+</html>
