@@ -33,11 +33,13 @@
         <video id="video" playsinline autoplay muted></video>
         <div class="camera-guide">
           <div class="guide-window">
-          <div class="ocr-debug-rect"></div>
-        </div>
+            <div class="ocr-debug-rect"></div>
+          </div>
           <p class="guide-label">Place Yu-Gi-Oh card inside frame</p>
-          <button id="scanBtn" class="scan-button" type="button">Scan Card</button>
-          <button id="closeCameraBtn" class="close-camera" type="button">Close</button>
+          <div class="camera-actions">
+            <button id="closeCameraBtn" class="close-camera" type="button">Close</button>
+            <button id="scanBtn" class="scan-button" type="button">Scan Card</button>
+          </div>
         </div>
         <canvas id="canvas" hidden></canvas>
       </div>
