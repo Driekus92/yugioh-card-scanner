@@ -136,7 +136,7 @@ video {
 .ocr-debug-rect {
   position: absolute;
   left: 65%;
-  top: 75%;
+  top: 72%;
   width: 30%;
   height: 6%;
   border: 2px dashed rgba(255, 255, 255, 0.9);

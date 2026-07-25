@@ -361,7 +361,7 @@ async function cropSetCodeBlob(blob) {
   const cropWidth = Math.max(180, Math.round(cardWidth * 0.30));
   const cropHeight = Math.max(60, Math.round(cardHeight * 0.07));
   const x = Math.min(img.width - cropWidth, Math.max(0, Math.round(cardX + cardWidth * 0.65)));
-  const y = Math.min(img.height - cropHeight, Math.max(0, Math.round(cardY + cardHeight * 0.75)));
+  const y = Math.min(img.height - cropHeight, Math.max(0, Math.round(cardY + cardHeight * 0.72)));
 
   const tempCanvas = document.createElement('canvas');
   tempCanvas.width = cropWidth;
