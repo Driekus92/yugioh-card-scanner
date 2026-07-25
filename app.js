@@ -145,6 +145,96 @@ function extractSetCodes(text) {
   return [...new Set(codes)];
 }
 
+const setCodeValidationCache = {};
+
+function normalizeSetCodeCandidate(code) {
+  let normalized = code
+    .toUpperCase()
+    .replace(/[-–—]/g, '-')
+    .replace(/[\/\\]/g, '-')
+    .replace(/[^A-Z0-9-]/g, '');
+
+  if (!normalized.includes('-')) {
+    const brokenMatch = normalized.match(/^([A-Z0-9]+?)(\d{3,4})$/);
+    if (brokenMatch) {
+      normalized = `${brokenMatch[1]}-${brokenMatch[2]}`;
+    }
+  }
+
+  const parts = normalized.split('-', 2);
+  if (parts.length === 2) {
+    const prefix = parts[0];
+    const suffix = parts[1]
+      .replace(/O/g, '0')
+      .replace(/[IL]/g, '1')
+      .replace(/S/g, '5')
+      .replace(/Z/g, '2');
+
+    normalized = `${prefix}-${suffix}`;
+  }
+
+  return normalized.replace(/[^A-Z0-9-]/g, '');
+}
+
+function generateSetCodeVariants(code) {
+  const normalized = normalizeSetCodeCandidate(code);
+  const variants = new Set([normalized]);
+  const parts = normalized.split('-', 2);
+
+  if (parts.length === 2) {
+    const [prefix, suffix] = parts;
+    const fixedSuffix = suffix
+      .replace(/O/g, '0')
+      .replace(/[IL]/g, '1')
+      .replace(/S/g, '5')
+      .replace(/Z/g, '2');
+
+    variants.add(`${prefix}-${fixedSuffix}`);
+
+    if (/^\d{1,4}$/.test(fixedSuffix)) {
+      variants.add(`${prefix}-${fixedSuffix.padStart(3, '0')}`);
+    }
+  }
+
+  return [...variants].filter(isValidSetCode);
+}
+
+async function validateSetCodeWithApi(code) {
+  if (setCodeValidationCache[code] !== undefined) {
+    return setCodeValidationCache[code];
+  }
+
+  const endpoint = `https://db.ygoprodeck.com/api/v7/cardinfo.php?setcode=${encodeURIComponent(code)}`;
+  try {
+    const response = await fetch(endpoint);
+    if (!response.ok) {
+      setCodeValidationCache[code] = false;
+      return false;
+    }
+
+    const json = await response.json();
+    const valid = Boolean(json && Array.isArray(json.data) && json.data.length > 0);
+    setCodeValidationCache[code] = valid;
+    return valid;
+  } catch (error) {
+    console.warn('Set code validation API failed for', code, error);
+    setCodeValidationCache[code] = false;
+    return false;
+  }
+}
+
+async function findBestSetCode(candidates) {
+  for (const candidate of candidates) {
+    const variants = generateSetCodeVariants(candidate);
+    for (const variant of variants) {
+      if (await validateSetCodeWithApi(variant)) {
+        return variant;
+      }
+    }
+  }
+  return null;
+}
+
 function guessCardName(text) {
   const disallowed = ['DECK', 'SET', 'CARD', 'YU-GI-OH', 'MONSTER', 'SPELL', 'TRAP', 'ATTACK', 'DEFENSE', 'LEVEL', 'ATK', 'DEF', 'LP'];
   const lines = text.split(/\r?\n/).map(line => line.trim()).filter(Boolean);
@@ -271,7 +361,7 @@ async function cropSetCodeBlob(blob) {
   const cropWidth = Math.max(180, Math.round(cardWidth * 0.30));
   const cropHeight = Math.max(60, Math.round(cardHeight * 0.07));
   const x = Math.min(img.width - cropWidth, Math.max(0, Math.round(cardX + cardWidth * 0.65)));
-  const y = Math.min(img.height - cropHeight, Math.max(0, Math.round(cardY + cardHeight * 0.78)));
+  const y = Math.min(img.height - cropHeight, Math.max(0, Math.round(cardY + cardHeight * 0.75)));
 
   const tempCanvas = document.createElement('canvas');
   tempCanvas.width = cropWidth;
@@ -302,8 +392,8 @@ async function recognizeImage(blob) {
     });
 
     const setText = (ocrResult.data.text || '').toUpperCase();
-    const codes = extractSetCodes(setText);
     const rawText = setText.trim();
+    const codes = extractSetCodes(setText);
 
     if (codes.length === 0) {
       updateResult('No set code detected. Align the card so the bottom-right code is inside the box.');
@@ -311,11 +401,17 @@ async function recognizeImage(blob) {
       return;
     }
 
-    const setCode = codes[0];
+    const bestMatch = await findBestSetCode(codes);
+    if (!bestMatch) {
+      updateResult('No valid set code match found. Try a clearer scan.');
+      logMessage(`OCR text found but no database match: ${rawText.replace(/\n/g, ' ')}`);
+      return;
+    }
+
     const edition = detectEdition(rawText);
-    updateResult(`Detected set code: ${setCode} (${edition})`);
-    logMessage('Set code found and added to the sheet.');
-    addEntry(setCode, 'Unknown', rawText, edition);
+    updateResult(`Detected set code: ${bestMatch} (${edition})`);
+    logMessage('Set code found and validated against database.');
+    addEntry(bestMatch, 'Unknown', rawText, edition);
   } catch (error) {
     console.error(error);
     updateResult('OCR failed. Use a clear, well-lit photo of the card.');
