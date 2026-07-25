@@ -71,6 +71,7 @@ button:hover:not(:disabled) {
 }
 
 .preview {
+  position: relative;
   display: grid;
   gap: 12px;
 }
@@ -81,6 +82,38 @@ video {
   border-radius: 20px;
   background: #03070d;
   object-fit: cover;
+}
+
+.camera-guide {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  pointer-events: none;
+}
+
+.guide-window {
+  width: min(86%, 360px);
+  aspect-ratio: 2.4 / 1;
+  border: 2px dashed rgba(255, 255, 255, 0.9);
+  border-radius: 18px;
+  box-shadow: 0 0 0 9999px rgba(0, 0, 0, 0.18);
+  background: rgba(255, 255, 255, 0.04);
+}
+
+.camera-guide p {
+  position: absolute;
+  bottom: 18px;
+  left: 50%;
+  transform: translateX(-50%);
+  margin: 0;
+  padding: 8px 14px;
+  border-radius: 999px;
+  background: rgba(0, 0, 0, 0.55);
+  color: #eef3ff;
+  font-size: 0.9rem;
+  letter-spacing: 0.01em;
 }
 
 .status-card {

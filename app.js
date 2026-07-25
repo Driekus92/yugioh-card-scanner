@@ -118,9 +118,28 @@ function renderEntries() {
 }
 
 function extractSetCodes(text) {
-  const normalized = text.toUpperCase();
-  const regex = /\b[A-Z0-9]{2,4}-\d{3}\b/g;
-  const codes = normalized.match(regex) || [];
+  const normalized = text
+    .toUpperCase()
+    .replace(/[\u2010\u2011\u2012\u2013\u2014\u2015]/g, '-')
+    .replace(/[\/\\]/g, '-')
+    .replace(/\s*[-–—]\s*/g, '-')
+    .replace(/\s+/g, ' ')
+    .replace(/([A-Z]{2,5})\s+(\d{3,4})\b/g, '$1-$2')
+    .replace(/([A-Z]{2,5})(\d{3,4})\b/g, '$1-$2')
+    .trim();
+
+  const regex = /\b([A-Z0-9]+(?:-[A-Z0-9]+)*)-(\d{3,4})\b/g;
+  const codes = [];
+  let match;
+
+  while ((match = regex.exec(normalized)) !== null) {
+    const prefix = match[1];
+    const number = match[2];
+    if (prefix && number) {
+      codes.push(`${prefix}-${number}`);
+    }
+  }
+
   return [...new Set(codes)];
 }
 
@@ -130,11 +149,52 @@ function guessCardName(text) {
   const candidates = lines.filter(line => {
     if (line.length < 3 || line.length > 40) return false;
     if (/^[0-9]+$/.test(line)) return false;
-    if (/\b[A-Z0-9]{2,4}-\d{3}\b/.test(line.toUpperCase())) return false;
+    if (/\b[A-Z0-9]{2,4}-\d{3,4}\b/.test(line.toUpperCase())) return false;
     const upper = line.toUpperCase();
     return !disallowed.some(token => upper.includes(token));
   });
   return candidates.length ? candidates[0] : '';
+}
+
+async function loadImage(blob) {
+  return new Promise((resolve, reject) => {
+    const img = new Image();
+    img.onload = () => resolve(img);
+    img.onerror = reject;
+    img.src = URL.createObjectURL(blob);
+  });
+}
+
+async function cropBottomAreaBlob(blob) {
+  const img = await loadImage(blob);
+  const cropWidth = Math.max(220, Math.round(img.width * 0.8));
+  const cropHeight = Math.max(140, Math.round(img.height * 0.22));
+  const x = Math.max(0, Math.round((img.width - cropWidth) / 2));
+  const y = Math.max(0, img.height - cropHeight - 10);
+
+  const tempCanvas = document.createElement('canvas');
+  tempCanvas.width = cropWidth;
+  tempCanvas.height = cropHeight;
+  const ctx = tempCanvas.getContext('2d');
+  ctx.drawImage(img, x, y, cropWidth, cropHeight, 0, 0, cropWidth, cropHeight);
+
+  return new Promise(resolve => tempCanvas.toBlob(resolve, 'image/png'));
+}
+
+async function cropTopTitleBlob(blob) {
+  const img = await loadImage(blob);
+  const cropWidth = Math.max(200, Math.round(img.width * 0.75));
+  const cropHeight = Math.max(90, Math.round(img.height * 0.13));
+  const x = Math.max(0, Math.round((img.width - cropWidth) / 2));
+  const y = Math.max(0, Math.round(img.height * 0.02));
+
+  const tempCanvas = document.createElement('canvas');
+  tempCanvas.width = cropWidth;
+  tempCanvas.height = cropHeight;
+  const ctx = tempCanvas.getContext('2d');
+  ctx.drawImage(img, x, y, cropWidth, cropHeight, 0, 0, cropWidth, cropHeight);
+
+  return new Promise(resolve => tempCanvas.toBlob(resolve, 'image/png'));
 }
 
 async function recognizeImage(blob) {
@@ -142,29 +202,60 @@ async function recognizeImage(blob) {
   updateResult('Scanning image for set code...');
 
   try {
-    const result = await Tesseract.recognize(blob, 'eng', {
-      logger: m => {
-        if (m.status && m.progress !== undefined) {
-          const percent = Math.round(m.progress * 100);
-          logMessage(`${m.status} (${percent}%)`);
-        }
-      }
-    });
+    const setCropBlob = await cropBottomAreaBlob(blob);
+    const titleCropBlob = await cropTopTitleBlob(blob);
 
-    const text = result.data.text || '';
-    const codes = extractSetCodes(text);
-    const cardName = guessCardName(text);
+    const [setCropResult, titleCropResult] = await Promise.all([
+      Tesseract.recognize(setCropBlob, 'eng', {
+        logger: m => {
+          if (m.status && m.progress !== undefined) {
+            const percent = Math.round(m.progress * 100 * 0.5);
+            logMessage(`${m.status} (${percent}%)`);
+          }
+        }
+      }),
+      Tesseract.recognize(titleCropBlob, 'eng', {
+        logger: m => {
+          if (m.status && m.progress !== undefined) {
+            const percent = Math.round(50 + m.progress * 100 * 0.5);
+            logMessage(`${m.status} (${percent}%)`);
+          }
+        }
+      })
+    ]);
+
+    const setText = setCropResult.data.text || '';
+    const titleText = titleCropResult.data.text || '';
+    const codes = extractSetCodes(setText);
+    let fullText = `${titleText}\n${setText}`;
+    let cardName = guessCardName(titleText) || guessCardName(fullText);
+
+    if (codes.length === 0) {
+      const fullResult = await Tesseract.recognize(blob, 'eng', {
+        logger: m => {
+          if (m.status && m.progress !== undefined) {
+            const percent = Math.round(m.progress * 100);
+            logMessage(`${m.status} (${percent}%)`);
+          }
+        }
+      });
+      const collectedText = fullResult.data.text || '';
+      fullText = `${titleText}\n${setText}\n${collectedText}`;
+      codes.push(...extractSetCodes(collectedText));
+      cardName = cardName || guessCardName(collectedText);
+    }
+
     if (codes.length === 0) {
       updateResult('No set code detected. Try another scan or upload a clearer image.');
-      logMessage('No valid set code found.');
+      logMessage(`No valid set code found. OCR text: ${fullText.slice(0, 120).replace(/\n/g, ' ')}`);
       return;
     }
 
     const setCode = codes[0];
-    const edition = detectEdition(text);
+    const edition = detectEdition(fullText);
     updateResult(`Detected set code: ${setCode}${cardName ? ' for ' + cardName : ''} (${edition})`);
     logMessage('Set code found and added to the sheet.');
-    addEntry(setCode, cardName, text, edition);
+    addEntry(setCode, cardName, fullText, edition);
   } catch (error) {
     console.error(error);
     updateResult('OCR failed. Use a clear, well-lit photo of the card.');
@@ -173,8 +264,10 @@ async function recognizeImage(blob) {
 }
 
 async function openCamera() {
-  if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) {
-    logMessage('Camera API not supported on this device. Use the upload button instead.');
+  const secure = window.isSecureContext || location.protocol === 'http:' && location.hostname === 'localhost';
+  if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia || !secure) {
+    logMessage('Camera unavailable here. Opening the upload picker instead.');
+    fileInput.click();
     return;
   }
 
@@ -186,11 +279,13 @@ async function openCamera() {
       audio: false
     });
     video.srcObject = stream;
+    await video.play();
     captureBtn.disabled = false;
     logMessage('Camera open. Align the card and tap Scan Card.');
   } catch (error) {
     console.error(error);
-    logMessage('Unable to open the camera. Use the upload button or check permissions.');
+    logMessage('Unable to open the camera. Opening the upload picker instead.');
+    fileInput.click();
   }
 }
 
