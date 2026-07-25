@@ -13,46 +13,69 @@
 </head>
 <body>
   <main>
-    <header>
-      <h1>Yugioh Setcode Scanner</h1>
-      <p>Scan a Yu-Gi-Oh! TCG card with your iPhone camera, extract the set code, and export it to Excel.</p>
-    </header>
-
-    <section class="camera-panel">
-      <div class="controls">
-        <button id="openCameraBtn">Open Camera</button>
-        <button id="captureBtn" disabled>Scan Card</button>
-        <button id="uploadBtn">Upload Image</button>
-        <button id="exportBtn">Export CSV</button>
-        <button id="clearBtn">Clear Sheet</button>
+    <section class="home-screen">
+      <div class="home-brand">
+        <h1>YU-GI-OH! SCANNER</h1>
       </div>
 
-      <input id="fileInput" type="file" accept="image/*" capture="environment" hidden />
+      <div class="home-grid">
+        <button id="openCameraBtn" class="home-card" type="button">
+          <span class="home-icon">📷</span>
+          <span>Open Camera</span>
+        </button>
+        <button id="scanListBtn" class="home-card" type="button">
+          <span class="home-icon">📋</span>
+          <span>Scan List</span>
+        </button>
+        <button id="exportBtn" class="home-card" type="button">
+          <span class="home-icon">⬇️</span>
+          <span>Export CSV</span>
+        </button>
+        <button id="clearBtn" class="home-card" type="button">
+          <span class="home-icon">🗑️</span>
+          <span>Clear</span>
+        </button>
+      </div>
 
-      <div class="preview">
-        <video id="video" playsinline autoplay muted></video>
-        <div class="camera-guide">
-          <div class="guide-window">
-            <div class="ocr-debug-rect"></div>
+      <p class="home-note">Tap Open Camera to start scanning Yu-Gi-Oh set codes.</p>
+    </section>
+
+    <section class="scanner-screen hidden">
+      <div class="camera-panel">
+        <button id="captureBtn" hidden></button>
+        <button id="uploadBtn" type="button" hidden>Upload Image</button>
+        <input id="fileInput" type="file" accept="image/*" capture="environment" hidden />
+
+        <div class="preview">
+          <video id="video" playsinline autoplay muted></video>
+          <div class="camera-guide">
+            <div class="guide-window">
+              <div class="ocr-debug-rect"></div>
+            </div>
+            <div id="scanPreview" class="scan-preview" aria-live="polite">
+              <span id="scanPreviewCode" class="scan-preview-text"></span>
+            </div>
+            <div class="camera-actions">
+              <button id="closeCameraBtn" class="close-camera" type="button">Close</button>
+              <button id="scanBtn" class="scan-button" type="button">Scan Card</button>
+            </div>
           </div>
-          <p class="guide-label">Place Yu-Gi-Oh card inside frame</p>
-          <div class="camera-actions">
-            <button id="closeCameraBtn" class="close-camera" type="button">Close</button>
-            <button id="scanBtn" class="scan-button" type="button">Scan Card</button>
-          </div>
+          <canvas id="canvas" hidden></canvas>
         </div>
-        <canvas id="canvas" hidden></canvas>
-      </div>
 
-      <div class="status-card">
-        <h2>Scan Result</h2>
-        <div id="scanResult" class="result">No scan yet.</div>
-        <div id="status" class="status">Ready.</div>
+        <div class="status-card">
+          <h2>Scan Result</h2>
+          <div id="scanResult" class="result">No scan yet.</div>
+          <div id="status" class="status">Ready.</div>
+        </div>
       </div>
     </section>
 
-    <section class="entries-panel">
-      <h2>Scanned Set Codes</h2>
+    <section class="entries-panel hidden">
+      <div class="entries-header">
+        <h2>Scanned Set Codes</h2>
+        <button id="scanListBack" class="back-button" type="button">Back</button>
+      </div>
       <div class="table-wrapper">
         <table id="entriesTable">
           <thead>
@@ -61,7 +84,7 @@
           <tbody></tbody>
         </table>
       </div>
-      <p class="note">The export is saved as a CSV file that can be opened in Excel and includes edition and duplicate counts. On iPhone 14, use Upload Image if camera access is blocked.</p>
+      <p class="note">The export is saved as a CSV file that can be opened in Excel and includes edition and duplicate counts.</p>
     </section>
   </main>
 

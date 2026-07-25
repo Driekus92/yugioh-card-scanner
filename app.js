@@ -1,4 +1,5 @@
 const openCameraBtn = document.getElementById('openCameraBtn');
+const scanListBtn = document.getElementById('scanListBtn');
 const captureBtn = document.getElementById('captureBtn');
 const uploadBtn = document.getElementById('uploadBtn');
 const exportBtn = document.getElementById('exportBtn');
@@ -11,7 +12,14 @@ const status = document.getElementById('status');
 const scanBtn = document.getElementById('scanBtn');
 const closeCameraBtn = document.getElementById('closeCameraBtn');
 const guideWindow = document.querySelector('.guide-window');
+const scanIndicator = document.querySelector('.ocr-debug-rect');
+const scanPreview = document.getElementById('scanPreview');
+const scanPreviewCode = document.getElementById('scanPreviewCode');
+const homeScreen = document.querySelector('.home-screen');
+const scannerScreen = document.querySelector('.scanner-screen');
+const entriesPanel = document.querySelector('.entries-panel');
 const entriesTableBody = document.querySelector('#entriesTable tbody');
+const scanListBack = document.getElementById('scanListBack');
 
 let stream = null;
 let entries = JSON.parse(localStorage.getItem('ygoscanner_entries') || '[]');
@@ -257,6 +265,27 @@ async function loadImage(blob) {
   });
 }
 
+function setScanIndicatorSuccess(active) {
+  if (!scanIndicator) return;
+  scanIndicator.classList.toggle('scan-success', active);
+}
+
+function showScanPreview(code) {
+  if (!scanPreview || !scanPreviewCode) return;
+  scanPreviewCode.textContent = code;
+  scanPreview.classList.add('active');
+}
+
+function hideScanPreview() {
+  if (!scanPreview) return;
+  scanPreview.classList.remove('active');
+}
+
+function resetScanIndicator() {
+  setScanIndicatorSuccess(false);
+  hideScanPreview();
+}
+
 function isValidSetCode(code) {
   return /^[A-Z0-9]{2,6}-[A-Z0-9]{2,5}$/.test(code);
 }
@@ -303,7 +332,26 @@ async function cropCardBlob(blob) {
   return new Promise(resolve => tempCanvas.toBlob(resolve, 'image/png'));
 }
 
+function showHomeScreen() {
+  if (homeScreen) homeScreen.classList.remove('hidden');
+  if (scannerScreen) scannerScreen.classList.add('hidden');
+  if (entriesPanel) entriesPanel.classList.add('hidden');
+}
+
+function showScannerScreen() {
+  if (homeScreen) homeScreen.classList.add('hidden');
+  if (scannerScreen) scannerScreen.classList.remove('hidden');
+  if (entriesPanel) entriesPanel.classList.add('hidden');
+}
+
+function showEntriesPanel() {
+  if (homeScreen) homeScreen.classList.add('hidden');
+  if (scannerScreen) scannerScreen.classList.add('hidden');
+  if (entriesPanel) entriesPanel.classList.remove('hidden');
+}
+
 function enterFullscreenMode() {
+  showScannerScreen();
   document.body.classList.add('fullscreen-camera');
   document.body.style.overflow = 'hidden';
   document.body.style.touchAction = 'none';
@@ -327,6 +375,8 @@ async function closeCamera() {
   stream = null;
   video.srcObject = null;
   exitFullscreenMode();
+  showHomeScreen();
+  resetScanIndicator();
   logMessage('Camera closed.');
 }
 
@@ -405,12 +455,15 @@ async function recognizeImage(blob) {
     if (!bestMatch) {
       updateResult('No valid set code match found. Try a clearer scan.');
       logMessage(`OCR text found but no database match: ${rawText.replace(/\n/g, ' ')}`);
+      setScanIndicatorSuccess(false);
       return;
     }
 
     const edition = detectEdition(rawText);
     updateResult(`Detected set code: ${bestMatch} (${edition})`);
     logMessage('Set code found and validated against database.');
+    setScanIndicatorSuccess(true);
+    showScanPreview(bestMatch);
     addEntry(bestMatch, 'Unknown', rawText, edition);
   } catch (error) {
     console.error(error);
@@ -437,6 +490,7 @@ async function openCamera() {
     video.srcObject = stream;
     await video.play();
     enterFullscreenMode();
+    resetScanIndicator();
     logMessage('Camera open. Place the card inside the frame and tap Scan.');
   } catch (error) {
     console.error(error);
@@ -562,6 +616,7 @@ function clearSheet() {
 }
 
 openCameraBtn.addEventListener('click', openCamera);
+if (scanListBtn) scanListBtn.addEventListener('click', showEntriesPanel);
 captureBtn.addEventListener('click', scanCard);
 if (scanBtn) scanBtn.addEventListener('click', scanCard);
 if (closeCameraBtn) closeCameraBtn.addEventListener('click', closeCamera);
@@ -573,6 +628,7 @@ fileInput.addEventListener('change', () => {
 });
 exportBtn.addEventListener('click', exportCsv);
 clearBtn.addEventListener('click', clearSheet);
+if (scanListBack) scanListBack.addEventListener('click', showHomeScreen);
 
 sortEntries();
 renderEntries();
