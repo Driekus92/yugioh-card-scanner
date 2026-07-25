@@ -122,16 +122,38 @@ video {
 
 .guide-window {
   position: absolute;
-  inset: auto;
   left: 50%;
   top: 50%;
   transform: translate(-50%, -50%);
-  width: min(88vw, 340px);
-  aspect-ratio: 1.4 / 1;
+  width: min(72vw, 280px);
+  aspect-ratio: 59 / 86;
   border: 2px solid rgba(255, 255, 255, 0.95);
-  border-radius: 22px;
-  box-shadow: 0 0 0 9999px rgba(0, 0, 0, 0.35);
-  background: rgba(255, 255, 255, 0.04);
+  border-radius: 28px;
+  background: transparent;
+  pointer-events: none;
+}
+
+.ocr-debug-rect {
+  position: absolute;
+  left: 65%;
+  top: 48%;
+  width: 30%;
+  height: 10%;
+  border: 2px dashed rgba(255, 255, 255, 0.9);
+  border-radius: 12px;
+  pointer-events: none;
+}
+
+.guide-label {
+  position: relative;
+  z-index: 1;
+  margin: 0;
+  padding: 10px 14px;
+  border-radius: 999px;
+  background: rgba(0, 0, 0, 0.35);
+  color: #eef3ff;
+  font-size: 0.95rem;
+  letter-spacing: 0.02em;
   pointer-events: none;
 }
 
@@ -146,7 +168,7 @@ video {
   font-weight: 700;
   color: white;
   background: rgba(0, 122, 255, 0.95);
-  box-shadow: 0 20px 40px rgba(0, 0, 0, 0.25);
+  box-shadow: 0 20px 40px rgba(0, 0, 0, 0.18);
   cursor: pointer;
   pointer-events: auto;
 }
@@ -156,17 +178,7 @@ video {
 }
 
 .camera-guide p {
-  position: absolute;
-  top: 18px;
-  left: 50%;
-  transform: translateX(-50%);
   margin: 0;
-  padding: 10px 14px;
-  border-radius: 999px;
-  background: rgba(0, 0, 0, 0.55);
-  color: #eef3ff;
-  font-size: 0.95rem;
-  letter-spacing: 0.01em;
 }
 
 @media (max-width: 720px) {
@@ -175,19 +187,6 @@ video {
   }
 }
 
-.camera-guide p {
-  position: absolute;
-  bottom: 18px;
-  left: 50%;
-  transform: translateX(-50%);
-  margin: 0;
-  padding: 8px 14px;
-  border-radius: 999px;
-  background: rgba(0, 0, 0, 0.55);
-  color: #eef3ff;
-  font-size: 0.9rem;
-  letter-spacing: 0.01em;
-}
 
 .status-card {
   margin-top: 16px;

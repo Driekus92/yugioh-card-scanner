@@ -261,12 +261,17 @@ function enhanceCroppedCanvas(canvas) {
 }
 
 async function cropSetCodeBlob(blob) {
-  const cardBlob = await cropCardBlob(blob);
-  const img = await loadImage(cardBlob);
-  const cropWidth = Math.max(180, Math.round(img.width * 0.48));
-  const cropHeight = Math.max(100, Math.round(img.height * 0.18));
-  const x = Math.max(0, Math.round(img.width * 0.48));
-  const y = Math.max(0, Math.round(img.height * 0.60));
+  const img = await loadImage(blob);
+  const guideArea = getGuideCropRect();
+  const cardX = guideArea ? guideArea.x : 0;
+  const cardY = guideArea ? guideArea.y : 0;
+  const cardWidth = guideArea ? guideArea.width : img.width;
+  const cardHeight = guideArea ? guideArea.height : img.height;
+
+  const cropWidth = Math.max(180, Math.round(cardWidth * 0.30));
+  const cropHeight = Math.max(80, Math.round(cardHeight * 0.10));
+  const x = Math.min(img.width - cropWidth, Math.max(0, Math.round(cardX + cardWidth * 0.65)));
+  const y = Math.min(img.height - cropHeight, Math.max(0, Math.round(cardY + cardHeight * 0.48)));
 
   const tempCanvas = document.createElement('canvas');
   tempCanvas.width = cropWidth;
