@@ -84,22 +84,95 @@ video {
   object-fit: cover;
 }
 
+.fullscreen-camera .preview,
+.fullscreen-camera video {
+  width: 100vw;
+  height: 100vh;
+  max-height: none;
+  border-radius: 0;
+}
+
+.fullscreen-camera main {
+  padding: 0;
+}
+
+.fullscreen-camera header,
+.fullscreen-camera .controls,
+.fullscreen-camera .status-card,
+.fullscreen-camera .entries-panel {
+  display: none;
+}
+
+.fullscreen-camera .preview {
+  position: relative;
+  min-height: 100vh;
+}
+
 .camera-guide {
   position: absolute;
   inset: 0;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 12px;
+  padding: 24px 16px 32px;
   pointer-events: none;
 }
 
 .guide-window {
   position: absolute;
-  right: 8%;
-  top: 42%;
-  width: min(46%, 280px);
-  aspect-ratio: 3.2 / 1;
-  border: 2px dashed rgba(255, 255, 255, 0.95);
-  border-radius: 18px;
-  box-shadow: 0 0 0 9999px rgba(0, 0, 0, 0.20);
-  background: rgba(255, 255, 255, 0.06);
+  inset: auto;
+  left: 50%;
+  top: 50%;
+  transform: translate(-50%, -50%);
+  width: min(88vw, 340px);
+  aspect-ratio: 1.4 / 1;
+  border: 2px solid rgba(255, 255, 255, 0.95);
+  border-radius: 22px;
+  box-shadow: 0 0 0 9999px rgba(0, 0, 0, 0.35);
+  background: rgba(255, 255, 255, 0.04);
+  pointer-events: none;
+}
+
+.scan-button,
+.close-camera {
+  width: min(280px, 92%);
+  max-width: 100%;
+  padding: 16px 20px;
+  border: none;
+  border-radius: 999px;
+  font-size: 1.05rem;
+  font-weight: 700;
+  color: white;
+  background: rgba(0, 122, 255, 0.95);
+  box-shadow: 0 20px 40px rgba(0, 0, 0, 0.25);
+  cursor: pointer;
+  pointer-events: auto;
+}
+
+.close-camera {
+  background: rgba(0, 0, 0, 0.55);
+}
+
+.camera-guide p {
+  position: absolute;
+  top: 18px;
+  left: 50%;
+  transform: translateX(-50%);
+  margin: 0;
+  padding: 10px 14px;
+  border-radius: 999px;
+  background: rgba(0, 0, 0, 0.55);
+  color: #eef3ff;
+  font-size: 0.95rem;
+  letter-spacing: 0.01em;
+}
+
+@media (max-width: 720px) {
+  .controls {
+    flex-direction: column;
+  }
 }
 
 .camera-guide p {

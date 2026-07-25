@@ -8,6 +8,9 @@ const video = document.getElementById('video');
 const canvas = document.getElementById('canvas');
 const scanResult = document.getElementById('scanResult');
 const status = document.getElementById('status');
+const scanBtn = document.getElementById('scanBtn');
+const closeCameraBtn = document.getElementById('closeCameraBtn');
+const guideWindow = document.querySelector('.guide-window');
 const entriesTableBody = document.querySelector('#entriesTable tbody');
 
 let stream = null;
@@ -168,6 +171,75 @@ function isValidSetCode(code) {
   return /^[A-Z0-9]{2,6}-[A-Z0-9]{2,5}$/.test(code);
 }
 
+function getGuideCropRect() {
+  if (!video.videoWidth || !video.videoHeight || !guideWindow) return null;
+  const videoRect = video.getBoundingClientRect();
+  const guideRect = guideWindow.getBoundingClientRect();
+  if (!videoRect.width || !videoRect.height) return null;
+
+  const scale = Math.max(videoRect.width / video.videoWidth, videoRect.height / video.videoHeight);
+  const sourceVisibleWidth = videoRect.width / scale;
+  const sourceVisibleHeight = videoRect.height / scale;
+  const offsetX = Math.max(0, (video.videoWidth - sourceVisibleWidth) / 2);
+  const offsetY = Math.max(0, (video.videoHeight - sourceVisibleHeight) / 2);
+
+  const x = Math.round((guideRect.left - videoRect.left) / scale + offsetX);
+  const y = Math.round((guideRect.top - videoRect.top) / scale + offsetY);
+  const width = Math.round(guideRect.width / scale);
+  const height = Math.round(guideRect.height / scale);
+
+  return {
+    x: Math.max(0, Math.min(video.videoWidth, x)),
+    y: Math.max(0, Math.min(video.videoHeight, y)),
+    width: Math.min(video.videoWidth - x, width),
+    height: Math.min(video.videoHeight - y, height)
+  };
+}
+
+async function cropCardBlob(blob) {
+  const img = await loadImage(blob);
+  const guideArea = getGuideCropRect();
+  const cropWidth = guideArea ? guideArea.width : img.width;
+  const cropHeight = guideArea ? guideArea.height : img.height;
+  const x = guideArea ? guideArea.x : 0;
+  const y = guideArea ? guideArea.y : 0;
+
+  const tempCanvas = document.createElement('canvas');
+  tempCanvas.width = cropWidth;
+  tempCanvas.height = cropHeight;
+  const ctx = tempCanvas.getContext('2d');
+  ctx.drawImage(img, x, y, cropWidth, cropHeight, 0, 0, cropWidth, cropHeight);
+
+  return new Promise(resolve => tempCanvas.toBlob(resolve, 'image/png'));
+}
+
+function enterFullscreenMode() {
+  document.body.classList.add('fullscreen-camera');
+  document.body.style.overflow = 'hidden';
+  document.body.style.touchAction = 'none';
+  document.body.style.overscrollBehavior = 'none';
+  if (scanBtn) scanBtn.disabled = false;
+  if (captureBtn) captureBtn.disabled = true;
+}
+
+function exitFullscreenMode() {
+  document.body.classList.remove('fullscreen-camera');
+  document.body.style.overflow = '';
+  document.body.style.touchAction = '';
+  document.body.style.overscrollBehavior = '';
+  if (captureBtn) captureBtn.disabled = false;
+}
+
+async function closeCamera() {
+  if (stream) {
+    stream.getTracks().forEach(track => track.stop());
+  }
+  stream = null;
+  video.srcObject = null;
+  exitFullscreenMode();
+  logMessage('Camera closed.');
+}
+
 function enhanceCroppedCanvas(canvas) {
   const ctx = canvas.getContext('2d');
   const imageData = ctx.getImageData(0, 0, canvas.width, canvas.height);
@@ -189,11 +261,12 @@ function enhanceCroppedCanvas(canvas) {
 }
 
 async function cropSetCodeBlob(blob) {
-  const img = await loadImage(blob);
-  const cropWidth = Math.max(220, Math.round(img.width * 0.42));
-  const cropHeight = Math.max(110, Math.round(img.height * 0.15));
-  const x = Math.max(0, Math.round(img.width * 0.54));
-  const y = Math.max(0, Math.round(img.height * 0.40));
+  const cardBlob = await cropCardBlob(blob);
+  const img = await loadImage(cardBlob);
+  const cropWidth = Math.max(180, Math.round(img.width * 0.48));
+  const cropHeight = Math.max(100, Math.round(img.height * 0.18));
+  const x = Math.max(0, Math.round(img.width * 0.48));
+  const y = Math.max(0, Math.round(img.height * 0.60));
 
   const tempCanvas = document.createElement('canvas');
   tempCanvas.width = cropWidth;
@@ -262,8 +335,8 @@ async function openCamera() {
     });
     video.srcObject = stream;
     await video.play();
-    captureBtn.disabled = false;
-    logMessage('Camera open. Align the card and tap Scan Card.');
+    enterFullscreenMode();
+    logMessage('Camera open. Place the card inside the frame and tap Scan.');
   } catch (error) {
     console.error(error);
     logMessage('Unable to open the camera. Opening the upload picker instead.');
@@ -389,6 +462,8 @@ function clearSheet() {
 
 openCameraBtn.addEventListener('click', openCamera);
 captureBtn.addEventListener('click', scanCard);
+if (scanBtn) scanBtn.addEventListener('click', scanCard);
+if (closeCameraBtn) closeCameraBtn.addEventListener('click', closeCamera);
 uploadBtn.addEventListener('click', () => fileInput.click());
 fileInput.addEventListener('change', () => {
   if (fileInput.files && fileInput.files[0]) {
