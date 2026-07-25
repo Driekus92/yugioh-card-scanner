@@ -124,19 +124,18 @@ function extractSetCodes(text) {
     .replace(/[\/\\]/g, '-')
     .replace(/\s*[-–—]\s*/g, '-')
     .replace(/\s+/g, ' ')
-    .replace(/([A-Z]{2,5})\s+(\d{3,4})\b/g, '$1-$2')
-    .replace(/([A-Z]{2,5})(\d{3,4})\b/g, '$1-$2')
+    .replace(/([A-Z0-9]{2,6})\s+(\d{3,4})\b/g, '$1-$2')
+    .replace(/([A-Z0-9]{2,6})(\d{3,4})\b/g, '$1-$2')
     .trim();
 
-  const regex = /\b([A-Z0-9]+(?:-[A-Z0-9]+)*)-(\d{3,4})\b/g;
+  const regex = /\b([A-Z0-9]{2,6}-[A-Z0-9]{2,5})\b/g;
   const codes = [];
   let match;
 
   while ((match = regex.exec(normalized)) !== null) {
-    const prefix = match[1];
-    const number = match[2];
-    if (prefix && number) {
-      codes.push(`${prefix}-${number}`);
+    const code = match[1];
+    if (code) {
+      codes.push(code);
     }
   }
 
@@ -165,97 +164,80 @@ async function loadImage(blob) {
   });
 }
 
-async function cropBottomAreaBlob(blob) {
-  const img = await loadImage(blob);
-  const cropWidth = Math.max(220, Math.round(img.width * 0.8));
-  const cropHeight = Math.max(140, Math.round(img.height * 0.22));
-  const x = Math.max(0, Math.round((img.width - cropWidth) / 2));
-  const y = Math.max(0, img.height - cropHeight - 10);
-
-  const tempCanvas = document.createElement('canvas');
-  tempCanvas.width = cropWidth;
-  tempCanvas.height = cropHeight;
-  const ctx = tempCanvas.getContext('2d');
-  ctx.drawImage(img, x, y, cropWidth, cropHeight, 0, 0, cropWidth, cropHeight);
-
-  return new Promise(resolve => tempCanvas.toBlob(resolve, 'image/png'));
+function isValidSetCode(code) {
+  return /^[A-Z0-9]{2,6}-[A-Z0-9]{2,5}$/.test(code);
 }
 
-async function cropTopTitleBlob(blob) {
+function enhanceCroppedCanvas(canvas) {
+  const ctx = canvas.getContext('2d');
+  const imageData = ctx.getImageData(0, 0, canvas.width, canvas.height);
+  const data = imageData.data;
+  const contrast = 70;
+  const factor = (259 * (contrast + 255)) / (255 * (259 - contrast));
+
+  for (let i = 0; i < data.length; i += 4) {
+    const r = data[i];
+    const g = data[i + 1];
+    const b = data[i + 2];
+    const gray = Math.round(r * 0.299 + g * 0.587 + b * 0.114);
+    const contrasted = Math.min(255, Math.max(0, factor * (gray - 128) + 128));
+    const threshold = contrasted > 140 ? 255 : 0;
+    data[i] = data[i + 1] = data[i + 2] = threshold;
+  }
+
+  ctx.putImageData(imageData, 0, 0);
+}
+
+async function cropSetCodeBlob(blob) {
   const img = await loadImage(blob);
-  const cropWidth = Math.max(200, Math.round(img.width * 0.75));
-  const cropHeight = Math.max(90, Math.round(img.height * 0.13));
-  const x = Math.max(0, Math.round((img.width - cropWidth) / 2));
-  const y = Math.max(0, Math.round(img.height * 0.02));
+  const cropWidth = Math.max(220, Math.round(img.width * 0.42));
+  const cropHeight = Math.max(110, Math.round(img.height * 0.15));
+  const x = Math.max(0, Math.round(img.width * 0.54));
+  const y = Math.max(0, Math.round(img.height * 0.40));
 
   const tempCanvas = document.createElement('canvas');
   tempCanvas.width = cropWidth;
   tempCanvas.height = cropHeight;
   const ctx = tempCanvas.getContext('2d');
   ctx.drawImage(img, x, y, cropWidth, cropHeight, 0, 0, cropWidth, cropHeight);
+  enhanceCroppedCanvas(tempCanvas);
 
   return new Promise(resolve => tempCanvas.toBlob(resolve, 'image/png'));
 }
 
 async function recognizeImage(blob) {
   logMessage('Recognizing text, this may take a moment...');
-  updateResult('Scanning image for set code...');
+  updateResult('Scanning the right-side set code area...');
 
   try {
-    const setCropBlob = await cropBottomAreaBlob(blob);
-    const titleCropBlob = await cropTopTitleBlob(blob);
-
-    const [setCropResult, titleCropResult] = await Promise.all([
-      Tesseract.recognize(setCropBlob, 'eng', {
-        logger: m => {
-          if (m.status && m.progress !== undefined) {
-            const percent = Math.round(m.progress * 100 * 0.5);
-            logMessage(`${m.status} (${percent}%)`);
-          }
+    const codeCropBlob = await cropSetCodeBlob(blob);
+    const ocrResult = await Tesseract.recognize(codeCropBlob, 'eng', {
+      tessedit_char_whitelist: 'ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789-',
+      tessedit_pageseg_mode: 7,
+      preserve_interword_spaces: '0',
+      logger: m => {
+        if (m.status && m.progress !== undefined) {
+          const percent = Math.round(m.progress * 100);
+          logMessage(`${m.status} (${percent}%)`);
         }
-      }),
-      Tesseract.recognize(titleCropBlob, 'eng', {
-        logger: m => {
-          if (m.status && m.progress !== undefined) {
-            const percent = Math.round(50 + m.progress * 100 * 0.5);
-            logMessage(`${m.status} (${percent}%)`);
-          }
-        }
-      })
-    ]);
+      }
+    });
 
-    const setText = setCropResult.data.text || '';
-    const titleText = titleCropResult.data.text || '';
+    const setText = (ocrResult.data.text || '').toUpperCase();
     const codes = extractSetCodes(setText);
-    let fullText = `${titleText}\n${setText}`;
-    let cardName = guessCardName(titleText) || guessCardName(fullText);
+    const rawText = setText.trim();
 
     if (codes.length === 0) {
-      const fullResult = await Tesseract.recognize(blob, 'eng', {
-        logger: m => {
-          if (m.status && m.progress !== undefined) {
-            const percent = Math.round(m.progress * 100);
-            logMessage(`${m.status} (${percent}%)`);
-          }
-        }
-      });
-      const collectedText = fullResult.data.text || '';
-      fullText = `${titleText}\n${setText}\n${collectedText}`;
-      codes.push(...extractSetCodes(collectedText));
-      cardName = cardName || guessCardName(collectedText);
-    }
-
-    if (codes.length === 0) {
-      updateResult('No set code detected. Try another scan or upload a clearer image.');
-      logMessage(`No valid set code found. OCR text: ${fullText.slice(0, 120).replace(/\n/g, ' ')}`);
+      updateResult('No set code detected. Align the card so the bottom-right code is inside the box.');
+      logMessage(`No valid set code found. OCR text: ${rawText.replace(/\n/g, ' ')}`);
       return;
     }
 
     const setCode = codes[0];
-    const edition = detectEdition(fullText);
-    updateResult(`Detected set code: ${setCode}${cardName ? ' for ' + cardName : ''} (${edition})`);
+    const edition = detectEdition(rawText);
+    updateResult(`Detected set code: ${setCode} (${edition})`);
     logMessage('Set code found and added to the sheet.');
-    addEntry(setCode, cardName, fullText, edition);
+    addEntry(setCode, 'Unknown', rawText, edition);
   } catch (error) {
     console.error(error);
     updateResult('OCR failed. Use a clear, well-lit photo of the card.');

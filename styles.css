@@ -87,19 +87,19 @@ video {
 .camera-guide {
   position: absolute;
   inset: 0;
-  display: flex;
-  align-items: center;
-  justify-content: center;
   pointer-events: none;
 }
 
 .guide-window {
-  width: min(86%, 360px);
-  aspect-ratio: 2.4 / 1;
-  border: 2px dashed rgba(255, 255, 255, 0.9);
+  position: absolute;
+  right: 8%;
+  top: 42%;
+  width: min(46%, 280px);
+  aspect-ratio: 3.2 / 1;
+  border: 2px dashed rgba(255, 255, 255, 0.95);
   border-radius: 18px;
-  box-shadow: 0 0 0 9999px rgba(0, 0, 0, 0.18);
-  background: rgba(255, 255, 255, 0.04);
+  box-shadow: 0 0 0 9999px rgba(0, 0, 0, 0.20);
+  background: rgba(255, 255, 255, 0.06);
 }
 
 .camera-guide p {
