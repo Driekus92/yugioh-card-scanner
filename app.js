@@ -25,6 +25,10 @@ const scanListBack = document.getElementById('scanListBack');
 let stream = null;
 let entries = JSON.parse(localStorage.getItem('ygoscanner_entries') || '[]');
 const DEBUG_NAME_OCR = true; // set to true to show the name-crop debug rectangle
+// Debug flags for OCR preview and comparison
+const DEBUG_OCR_PREVIEW = true; // set to true to show cropped images sent to OCR
+const DEBUG_OCR_COMPARE_PROCESSED = true; // set to true to run OCR on raw + processed crops for comparison
+const DEBUG_OCR_SKIP_ENHANCE = false; // set to true to skip enhanceCroppedCanvas() (for comparison)
 
 function logMessage(message) {
   status.textContent = message;
@@ -495,6 +499,61 @@ function showScanPreview(code) {
   scanPreview.classList.add('active');
 }
 
+// Show OCR preview images in the camera guide for debugging
+function showOcrPreview(rawUrl, processedUrl) {
+  try {
+    let container = document.getElementById('ocrPreviewContainer');
+    if (!container) {
+      const guide = document.querySelector('.camera-guide');
+      container = document.createElement('div');
+      container.id = 'ocrPreviewContainer';
+      container.style.position = 'absolute';
+      container.style.right = '8px';
+      container.style.bottom = '8px';
+      container.style.zIndex = '9999';
+      container.style.display = 'flex';
+      container.style.gap = '6px';
+      guide.appendChild(container);
+    }
+
+    // helper to create/update preview box
+    const upsert = (id, url, label) => {
+      let box = document.getElementById(id);
+      if (!box) {
+        box = document.createElement('div');
+        box.id = id;
+        box.style.background = 'rgba(0,0,0,0.6)';
+        box.style.color = '#fff';
+        box.style.padding = '4px';
+        box.style.borderRadius = '6px';
+        box.style.width = '96px';
+        box.style.textAlign = 'center';
+        box.style.fontSize = '10px';
+        const img = document.createElement('img');
+        img.style.width = '88px';
+        img.style.height = '56px';
+        img.style.objectFit = 'cover';
+        img.id = id + '-img';
+        const lbl = document.createElement('div');
+        lbl.id = id + '-lbl';
+        lbl.style.marginTop = '4px';
+        box.appendChild(img);
+        box.appendChild(lbl);
+        container.appendChild(box);
+      }
+      const img = document.getElementById(id + '-img');
+      const lbl = document.getElementById(id + '-lbl');
+      if (url) img.src = url; else img.src = '';
+      lbl.textContent = label || '';
+    };
+
+    upsert('ocrPreviewRaw', rawUrl || '', 'Raw');
+    upsert('ocrPreviewProc', processedUrl || '', 'Processed');
+  } catch (e) {
+    console.warn('showOcrPreview failed', e);
+  }
+}
+
 function hideScanPreview() {
   if (!scanPreview) return;
   scanPreview.classList.remove('active');
@@ -703,20 +762,55 @@ async function cropSetCodeBlob(blob) {
   const cardWidth = guideArea ? guideArea.width : img.width;
   const cardHeight = guideArea ? guideArea.height : img.height;
   // Slightly increase the crop to reduce movement sensitivity (≈ +13%)
-  const cropWidth = Math.max(180, Math.round(cardWidth * 0.34));
-  const cropHeight = Math.max(60, Math.round(cardHeight * 0.08));
-  const x = Math.min(img.width - cropWidth, Math.max(0, Math.round(cardX + cardWidth * 0.65)));
-  const y = Math.min(img.height - cropHeight, Math.max(0, Math.round(cardY + cardHeight * 0.72)));
+  // Increase crop size and move it slightly up/left to target the set-code line
+  const cropWidth = Math.max(220, Math.round(cardWidth * 0.42));
+  const cropHeight = Math.max(80, Math.round(cardHeight * 0.14));
+  // Position the crop on the bottom-right area but a bit more centered vertically (upwards)
+  const x = Math.min(img.width - cropWidth, Math.max(0, Math.round(cardX + cardWidth * 0.60)));
+  const y = Math.min(img.height - cropHeight, Math.max(0, Math.round(cardY + cardHeight * 0.62)));
 
-  const tempCanvas = document.createElement('canvas');
-  tempCanvas.width = cropWidth;
-  tempCanvas.height = cropHeight;
-  const ctx = tempCanvas.getContext('2d');
-  ctx.drawImage(img, x, y, cropWidth, cropHeight, 0, 0, cropWidth, cropHeight);
-  enhanceCroppedCanvas(tempCanvas);
+  // Raw canvas (unprocessed)
+  const rawCanvas = document.createElement('canvas');
+  rawCanvas.width = cropWidth;
+  rawCanvas.height = cropHeight;
+  const rawCtx = rawCanvas.getContext('2d');
+  rawCtx.drawImage(img, x, y, cropWidth, cropHeight, 0, 0, cropWidth, cropHeight);
+
+  // Processed canvas (may be enhanced)
+  const procCanvas = document.createElement('canvas');
+  procCanvas.width = cropWidth;
+  procCanvas.height = cropHeight;
+  const procCtx = procCanvas.getContext('2d');
+  procCtx.drawImage(rawCanvas, 0, 0);
+  if (!DEBUG_OCR_SKIP_ENHANCE) {
+    enhanceCroppedCanvas(procCanvas);
+  }
+
+  // Convert canvases to blobs
+  const rawBlob = await new Promise(resolve => rawCanvas.toBlob(resolve, 'image/png'));
+  const procBlob = await new Promise(resolve => procCanvas.toBlob(resolve, 'image/png'));
+
+  // Show preview images if enabled
+  if (DEBUG_OCR_PREVIEW) {
+    try {
+      const rawUrl = URL.createObjectURL(rawBlob);
+      const procUrl = URL.createObjectURL(procBlob);
+      showOcrPreview(rawUrl, procUrl);
+      // Revoke URLs after a short delay to allow image load (keep lightweight)
+      setTimeout(() => {
+        try { URL.revokeObjectURL(rawUrl); } catch (e) {}
+        try { URL.revokeObjectURL(procUrl); } catch (e) {}
+      }, 5000);
+    } catch (e) {
+      console.warn('OCR preview failed', e);
+    }
+  }
+
   alert('cropSetCodeBlob complete');
 
-  return new Promise(resolve => tempCanvas.toBlob(resolve, 'image/png'));
+  // Return both blobs when comparison requested, otherwise return processed blob
+  if (DEBUG_OCR_COMPARE_PROCESSED) return { rawBlob, processedBlob: procBlob };
+  return procBlob;
 }
 
 async function recognizeImage(blob) {
@@ -728,13 +822,21 @@ async function recognizeImage(blob) {
   try {
     console.log('recognizeImage: set code crop preparing');
     alert('Cropping set code area');
-    const codeCropBlob = await cropSetCodeBlob(blob);
+    const cropResult = await cropSetCodeBlob(blob);
     alert('Set code crop ready');
     console.log('recognizeImage: set code image captured (blob)');
-    alert('Starting set code OCR');
-    console.log('recognizeImage: set code OCR started');
-    alert('Calling Tesseract.recognize');
-    const ocrResult = await Tesseract.recognize(codeCropBlob, 'eng', {
+    // cropResult may be a blob or an object { rawBlob, processedBlob }
+    let rawCropBlob = null;
+    let procCropBlob = null;
+    if (cropResult && cropResult.rawBlob !== undefined) {
+      rawCropBlob = cropResult.rawBlob;
+      procCropBlob = cropResult.processedBlob;
+    } else {
+      procCropBlob = cropResult;
+    }
+
+    // Optionally run OCR on the raw crop for comparison
+    const tesseractOpts = {
       tessedit_char_whitelist: 'ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789-',
       tessedit_pageseg_mode: 7,
       preserve_interword_spaces: '0',
@@ -744,7 +846,23 @@ async function recognizeImage(blob) {
           logMessage(`${m.status} (${percent}%)`);
         }
       }
-    });
+    };
+
+    if (DEBUG_OCR_COMPARE_PROCESSED && rawCropBlob) {
+      try {
+        alert('Starting raw crop OCR (debug)');
+        const rawRes = await Tesseract.recognize(rawCropBlob, 'eng', tesseractOpts);
+        const rawText = (rawRes.data.text || '').toUpperCase().trim();
+        alert(`Raw crop OCR text:\n${rawText.substring(0,200)}`);
+      } catch (e) {
+        alert('Raw crop OCR failed: ' + (e && e.message ? e.message : e));
+      }
+    }
+
+    alert('Starting set code OCR');
+    console.log('recognizeImage: set code OCR started');
+    alert('Calling Tesseract.recognize');
+    const ocrResult = await Tesseract.recognize(procCropBlob, 'eng', tesseractOpts);
 
     alert('Tesseract.recognize returned');
     const setText = (ocrResult.data.text || '').toUpperCase();
