@@ -472,8 +472,14 @@ function compareNames(a, b) {
 async function loadImage(blob) {
   return new Promise((resolve, reject) => {
     const img = new Image();
-    img.onload = () => resolve(img);
-    img.onerror = reject;
+    img.onload = () => {
+      alert('loadImage onload');
+      resolve(img);
+    };
+    img.onerror = () => {
+      alert('loadImage error');
+      reject(new Error('Image load failed'));
+    };
     img.src = URL.createObjectURL(blob);
   });
 }
@@ -690,6 +696,7 @@ async function extractNameFromBlob(blob) {
 async function cropSetCodeBlob(blob) {
   alert('cropSetCodeBlob() entered');
   const img = await loadImage(blob);
+  alert('loadImage returned');
   const guideArea = getGuideCropRect();
   const cardX = guideArea ? guideArea.x : 0;
   const cardY = guideArea ? guideArea.y : 0;
@@ -707,6 +714,7 @@ async function cropSetCodeBlob(blob) {
   const ctx = tempCanvas.getContext('2d');
   ctx.drawImage(img, x, y, cropWidth, cropHeight, 0, 0, cropWidth, cropHeight);
   enhanceCroppedCanvas(tempCanvas);
+  alert('cropSetCodeBlob complete');
 
   return new Promise(resolve => tempCanvas.toBlob(resolve, 'image/png'));
 }
@@ -725,6 +733,7 @@ async function recognizeImage(blob) {
     console.log('recognizeImage: set code image captured (blob)');
     alert('Starting set code OCR');
     console.log('recognizeImage: set code OCR started');
+    alert('Calling Tesseract.recognize');
     const ocrResult = await Tesseract.recognize(codeCropBlob, 'eng', {
       tessedit_char_whitelist: 'ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789-',
       tessedit_pageseg_mode: 7,
