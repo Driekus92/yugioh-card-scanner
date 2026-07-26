@@ -746,6 +746,7 @@ async function recognizeImage(blob) {
       }
     });
 
+    alert('Set code OCR completed');
     const setText = (ocrResult.data.text || '').toUpperCase();
       console.log('recognizeImage: set code OCR returned');
     const rawText = setText.trim();
