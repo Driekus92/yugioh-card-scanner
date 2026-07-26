@@ -13,6 +13,7 @@ const scanBtn = document.getElementById('scanBtn');
 const closeCameraBtn = document.getElementById('closeCameraBtn');
 const guideWindow = document.querySelector('.guide-window');
 const scanIndicator = document.querySelector('.ocr-debug-rect');
+const nameRect = document.querySelector('.name-ocr-rect');
 const scanPreview = document.getElementById('scanPreview');
 const scanPreviewCode = document.getElementById('scanPreviewCode');
 const homeScreen = document.querySelector('.home-screen');
@@ -23,6 +24,7 @@ const scanListBack = document.getElementById('scanListBack');
 
 let stream = null;
 let entries = JSON.parse(localStorage.getItem('ygoscanner_entries') || '[]');
+const DEBUG_NAME_OCR = true; // set to true to show the name-crop debug rectangle
 
 function logMessage(message) {
   status.textContent = message;
@@ -64,13 +66,19 @@ function saveEntries() {
   localStorage.setItem('ygoscanner_entries', JSON.stringify(entries));
 }
 
-function addEntry(setCode, cardName, rawText, edition) {
+function addEntry(setCode, name, rawText, edition, setName, rarity, image, confidence) {
+  const now = new Date().toISOString().slice(0, 19).replace('T', ' ');
   const entry = {
     setCode,
-    cardName: cardName || 'Unknown',
+    name: name || 'Unknown',
+    setName: setName || '',
+    rarity: rarity || '',
+    image: image || '',
     edition: edition || 'Other',
     rawText: rawText || '',
-    scannedAt: new Date().toISOString().slice(0, 19).replace('T', ' '),
+    scannedAt: now,
+    scannedDate: now,
+    confidence: confidence || 'low'
   };
   entries.unshift(entry);
   saveEntries();
@@ -85,15 +93,27 @@ function groupEntries() {
       map[key] = {
         setCode: entry.setCode,
         edition,
-        cardName: entry.cardName,
+        name: entry.name || entry.cardName || 'Unknown',
+        setName: entry.setName || '',
+        rarity: entry.rarity || '',
+        image: entry.image || '',
         rawText: entry.rawText,
         count: 0,
         lastScannedAt: entry.scannedAt,
       };
     }
     map[key].count += 1;
-    if (entry.cardName !== 'Unknown' && entry.cardName.length > (map[key].cardName || '').length) {
-      map[key].cardName = entry.cardName;
+    if (entry.name && entry.name !== 'Unknown' && entry.name.length > (map[key].name || '').length) {
+      map[key].name = entry.name;
+    }
+    if (entry.setName && entry.setName.length > (map[key].setName || '').length) {
+      map[key].setName = entry.setName;
+    }
+    if (entry.rarity && entry.rarity.length > (map[key].rarity || '').length) {
+      map[key].rarity = entry.rarity;
+    }
+    if (entry.image && (map[key].image || '').length === 0) {
+      map[key].image = entry.image;
     }
     if (entry.rawText.length > map[key].rawText.length) {
       map[key].rawText = entry.rawText;
@@ -119,10 +139,11 @@ function renderEntries() {
     <tr>
       <td>${index + 1}</td>
       <td>${entry.setCode}</td>
+      <td>${entry.name || entry.cardName || 'Unknown'}</td>
+      <td>${entry.setName || ''}</td>
+      <td>${entry.rarity || ''}</td>
       <td>${entry.edition}</td>
       <td>${entry.count}</td>
-      <td>${entry.cardName}</td>
-      <td>${entry.rawText.replace(/\n/g, ' ').slice(0, 120)}</td>
       <td>${entry.lastScannedAt}</td>
     </tr>
   `).join('');
@@ -229,6 +250,106 @@ async function validateSetCodeWithApi(code) {
     setCodeValidationCache[code] = false;
     return false;
   }
+}
+
+async function fetchCardInfo(code, detectedName) {
+  const norm = normalizeSetCodeCandidate(code);
+
+  function normalizeApiSetCode(s) {
+    if (!s) return '';
+    return s.toUpperCase().replace(/[^A-Z0-9-]/g, '');
+  }
+
+  // Helper to query the API for a specific variant and collect matches
+  async function queryVariant(variant) {
+    const endpoint = `https://db.ygoprodeck.com/api/v7/cardinfo.php?setcode=${encodeURIComponent(variant)}`;
+    try {
+      const response = await fetch(endpoint);
+      if (!response.ok) return null;
+      const json = await response.json();
+      if (!json || !Array.isArray(json.data) || !json.data.length) return null;
+
+      const exactMatches = [];
+      const containsMatches = [];
+
+      for (const card of json.data) {
+        const sets = card.card_sets || [];
+        for (const s of sets) {
+          const apiCode = normalizeApiSetCode(s.set_code);
+          if (apiCode === variant.toUpperCase()) {
+            exactMatches.push({ card, matched: s, matchedCode: s.set_code });
+          } else if (apiCode.includes(variant.toUpperCase())) {
+            containsMatches.push({ card, matched: s, matchedCode: s.set_code });
+          }
+        }
+      }
+
+      return { cards: json.data, exactMatches, containsMatches };
+    } catch (e) {
+      console.warn('fetchCardInfo query failed for', variant, e);
+      return null;
+    }
+  }
+
+  // 1) Try an exact search for the normalized candidate first
+  const exactResult = await queryVariant(norm);
+  if (exactResult) {
+    // If we have exact matches (set_code equality)
+    if (exactResult.exactMatches && exactResult.exactMatches.length) {
+      // If a detectedName was provided, prefer a card whose name matches exactly (case-insensitive)
+      if (detectedName) {
+        const nameNorm = (detectedName || '').trim().toLowerCase();
+        const nameMatch = exactResult.exactMatches.find(e => (e.card && e.card.name && e.card.name.trim().toLowerCase()) === nameNorm);
+        if (nameMatch) {
+          console.log('fetchCardInfo: exact set_code and name match for', norm, nameMatch.matchedCode);
+          logMessage('Database lookup: exact match (name confirmed)');
+          const card = nameMatch.card;
+          const matched = nameMatch.matched || {};
+          return { name: card.name || 'Unknown', setName: matched.set_name || '', rarity: matched.set_rarity || '', image: (card.card_images && card.card_images[0] && card.card_images[0].image_url) || '', matchType: 'exact', matchedCode: nameMatch.matchedCode, confidence: 'high' };
+        }
+      }
+
+      // No name provided or no name match – return first exact match with medium confidence
+      const first = exactResult.exactMatches[0];
+      console.log('fetchCardInfo: exact set_code match for', norm, first.matchedCode);
+      logMessage('Database lookup: exact match');
+      const card = first.card;
+      const matched = first.matched || {};
+      return { name: card.name || 'Unknown', setName: matched.set_name || '', rarity: matched.set_rarity || '', image: (card.card_images && card.card_images[0] && card.card_images[0].image_url) || '', matchType: 'exact', matchedCode: first.matchedCode, confidence: 'medium' };
+    }
+    // If API returned data but no exact set_code equality, keep note and continue to normalized attempts
+    console.log('fetchCardInfo: API returned results for', norm, 'but no exact set_code equality');
+  }
+
+  // 2) Try normalized/alternative variants (common OCR corrections)
+  const variants = generateSetCodeVariants(norm).filter(v => v !== norm);
+  for (const variant of variants) {
+    const r = await queryVariant(variant);
+    if (!r) continue;
+    if (r.exactMatches && r.exactMatches.length) {
+      // normalized variant exact match – treat as medium confidence (name match only raises to medium here per policy)
+      const first = r.exactMatches[0];
+      console.log('fetchCardInfo: normalized exact match for', variant, first.matchedCode);
+      logMessage('Database lookup: normalized match');
+      const card = first.card;
+      const matched = first.matched || {};
+      return { name: card.name || 'Unknown', setName: matched.set_name || '', rarity: matched.set_rarity || '', image: (card.card_images && card.card_images[0] && card.card_images[0].image_url) || '', matchType: 'normalized', matchedCode: first.matchedCode, confidence: 'medium' };
+    }
+    // contains-match fallback
+    if (r.containsMatches && r.containsMatches.length) {
+      const first = r.containsMatches[0];
+      console.log('fetchCardInfo: normalized contains-match for', variant, first.matchedCode);
+      logMessage('Database lookup: normalized match (contains)');
+      const card = first.card;
+      const matched = first.matched || {};
+      return { name: card.name || 'Unknown', setName: matched.set_name || '', rarity: matched.set_rarity || '', image: (card.card_images && card.card_images[0] && card.card_images[0].image_url) || '', matchType: 'normalized', matchedCode: first.matchedCode, confidence: 'medium' };
+    }
+  }
+
+  // 3) No match found — do not fail the scan; return minimal info and indicate none
+  console.log('fetchCardInfo: no database match for', norm);
+  logMessage('Database lookup: no database match');
+  return { name: 'Unknown', setName: '', rarity: '', image: '', matchType: 'none', matchedCode: '', confidence: 'low' };
 }
 
 async function findBestSetCode(candidates) {
@@ -358,6 +479,7 @@ function enterFullscreenMode() {
   document.body.style.overscrollBehavior = 'none';
   if (scanBtn) scanBtn.disabled = false;
   if (captureBtn) captureBtn.disabled = true;
+  if (nameRect) nameRect.classList.toggle('active', DEBUG_NAME_OCR);
 }
 
 function exitFullscreenMode() {
@@ -366,6 +488,7 @@ function exitFullscreenMode() {
   document.body.style.touchAction = '';
   document.body.style.overscrollBehavior = '';
   if (captureBtn) captureBtn.disabled = false;
+  if (nameRect) nameRect.classList.remove('active');
 }
 
 async function closeCamera() {
@@ -398,6 +521,78 @@ function enhanceCroppedCanvas(canvas) {
   }
 
   ctx.putImageData(imageData, 0, 0);
+}
+
+function preprocessNameCanvas(canvas) {
+  const ctx = canvas.getContext('2d');
+  const imageData = ctx.getImageData(0, 0, canvas.width, canvas.height);
+  const data = imageData.data;
+  const contrast = 80;
+  const factor = (259 * (contrast + 255)) / (255 * (259 - contrast));
+
+  for (let i = 0; i < data.length; i += 4) {
+    const r = data[i];
+    const g = data[i + 1];
+    const b = data[i + 2];
+    const gray = Math.round(r * 0.299 + g * 0.587 + b * 0.114);
+    const contrasted = Math.min(255, Math.max(0, factor * (gray - 128) + 128));
+    data[i] = data[i + 1] = data[i + 2] = contrasted;
+  }
+
+  ctx.putImageData(imageData, 0, 0);
+
+  // Apply a light threshold to improve OCR on text
+  const img = ctx.getImageData(0, 0, canvas.width, canvas.height);
+  const d = img.data;
+  const threshold = 120;
+  for (let i = 0; i < d.length; i += 4) {
+    const v = d[i];
+    const t = v > threshold ? 255 : 0;
+    d[i] = d[i + 1] = d[i + 2] = t;
+  }
+  ctx.putImageData(img, 0, 0);
+}
+
+async function cropNameBlob(blob) {
+  const img = await loadImage(blob);
+  const guideArea = getGuideCropRect();
+  const cardX = guideArea ? guideArea.x : 0;
+  const cardY = guideArea ? guideArea.y : 0;
+  const cardWidth = guideArea ? guideArea.width : img.width;
+  const cardHeight = guideArea ? guideArea.height : img.height;
+
+  const cropX = Math.min(img.width - 1, Math.max(0, Math.round(cardX + cardWidth * 0.05)));
+  const cropY = Math.min(img.height - 1, Math.max(0, Math.round(cardY + cardHeight * 0.04)));
+  const cropWidth = Math.min(img.width - cropX, Math.round(cardWidth * 0.90));
+  const cropHeight = Math.min(img.height - cropY, Math.max(30, Math.round(cardHeight * 0.12)));
+
+  const tempCanvas = document.createElement('canvas');
+  tempCanvas.width = cropWidth;
+  tempCanvas.height = cropHeight;
+  const ctx = tempCanvas.getContext('2d');
+  ctx.drawImage(img, cropX, cropY, cropWidth, cropHeight, 0, 0, cropWidth, cropHeight);
+  preprocessNameCanvas(tempCanvas);
+
+  return new Promise(resolve => tempCanvas.toBlob(resolve, 'image/png'));
+}
+
+async function extractNameFromBlob(blob) {
+  try {
+    const nameBlob = await cropNameBlob(blob);
+    if (!nameBlob) return '';
+    const ocr = await Tesseract.recognize(nameBlob, 'eng', {
+      tessedit_char_whitelist: "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789 '’-:,.()",
+      tessedit_pageseg_mode: 7,
+    });
+    let text = (ocr.data.text || '').trim();
+    text = text.replace(/[\r\n]+/g, ' ');
+    text = text.replace(/[^A-Za-z0-9\u00C0-\u024F'’\-:\,\.\(\) ]+/g, '');
+    text = text.replace(/\s+/g, ' ').trim();
+    return text;
+  } catch (e) {
+    console.warn('Name OCR failed', e);
+    return '';
+  }
 }
 
 async function cropSetCodeBlob(blob) {
@@ -460,11 +655,31 @@ async function recognizeImage(blob) {
     }
 
     const edition = detectEdition(rawText);
-    updateResult(`Detected set code: ${bestMatch} (${edition})`);
-    logMessage('Set code found and validated against database.');
+    logMessage('Set code found and validated against database. Fetching card info...');
     setScanIndicatorSuccess(true);
     showScanPreview(bestMatch);
-    addEntry(bestMatch, 'Unknown', rawText, edition);
+
+    // detectedName is not yet extracted from OCR; pass undefined for now.
+    // Run name OCR on the captured full image to provide an optional detected card name
+    const detectedName = await extractNameFromBlob(blob);
+    if (detectedName) console.log('Detected name OCR:', detectedName);
+
+    const cardInfo = await fetchCardInfo(bestMatch, detectedName || undefined);
+
+    if (cardInfo.matchType === 'exact') {
+      console.log('Lookup path: exact');
+      logMessage('Lookup path: exact match');
+    } else if (cardInfo.matchType === 'normalized') {
+      console.log('Lookup path: normalized');
+      logMessage('Lookup path: normalized match');
+    } else {
+      console.log('Lookup path: none');
+      logMessage('Lookup path: no database match');
+    }
+
+    updateResult(`Detected ${bestMatch} — ${cardInfo.name || 'Unknown'} (${cardInfo.setName || edition})`);
+    // Always save the scan; if no DB match, name will be 'Unknown' and other fields empty
+    addEntry(bestMatch, cardInfo.name || 'Unknown', rawText, edition, cardInfo.setName, cardInfo.rarity, cardInfo.image, cardInfo.confidence || 'low');
   } catch (error) {
     console.error(error);
     updateResult('OCR failed. Use a clear, well-lit photo of the card.');
@@ -548,49 +763,38 @@ function exportCsv() {
     logMessage('No saved entries to export.');
     return;
   }
-
   const grouped = entries.reduce((map, entry) => {
-    const edition = entry.edition || 'Other';
-    const key = `${entry.setCode}|${edition}`;
+    const key = entry.setCode;
     if (!map[key]) {
       map[key] = {
         setCode: entry.setCode,
-        edition,
-        cardName: entry.cardName,
-        rawText: entry.rawText,
-        count: 0,
+        name: entry.name || entry.cardName || 'Unknown',
+        setName: entry.setName || '',
+        rarity: entry.rarity || '',
         lastScannedAt: entry.scannedAt
       };
     }
-    map[key].count += 1;
-    if (entry.cardName !== 'Unknown' && entry.cardName.length > (map[key].cardName || '').length) {
-      map[key].cardName = entry.cardName;
-    }
-    if (entry.rawText.length > map[key].rawText.length) {
-      map[key].rawText = entry.rawText;
-    }
-    if (entry.scannedAt > map[key].lastScannedAt) {
-      map[key].lastScannedAt = entry.scannedAt;
-    }
+    // prefer longer/more informative values
+    if (entry.name && entry.name.length > (map[key].name || '').length) map[key].name = entry.name;
+    if (entry.setName && entry.setName.length > (map[key].setName || '').length) map[key].setName = entry.setName;
+    if (entry.rarity && entry.rarity.length > (map[key].rarity || '').length) map[key].rarity = entry.rarity;
+    if (entry.scannedAt > map[key].lastScannedAt) map[key].lastScannedAt = entry.scannedAt;
     return map;
   }, {});
 
   const uniqueEntries = Object.values(grouped).sort((a, b) => {
     const prefixCompare = compareSetCodes(a.setCode, b.setCode);
     if (prefixCompare !== 0) return prefixCompare;
-    if (a.edition < b.edition) return -1;
-    if (a.edition > b.edition) return 1;
-    return a.lastScannedAt.localeCompare(b.lastScannedAt);
+    return (a.lastScannedAt || '').localeCompare(b.lastScannedAt || '');
   });
 
-  const header = ['Set Code', 'Edition', 'Quantity', 'Card Name', 'Raw Text', 'Last Scanned'];
+  const header = ['Set Code', 'Card Name', 'Set Name', 'Rarity', 'Scan Date'];
   const rows = uniqueEntries.map(entry => [
     entry.setCode,
-    entry.edition,
-    entry.count,
-    entry.cardName,
-    entry.rawText.replace(/"/g, '""'),
-    entry.lastScannedAt
+    (entry.name || '').replace(/"/g, '""'),
+    (entry.setName || '').replace(/"/g, '""'),
+    (entry.rarity || '').replace(/"/g, '""'),
+    entry.lastScannedAt || ''
   ]);
 
   const csv = [header, ...rows].map(row => row.map(value => `"${value}"`).join(',')).join('\n');

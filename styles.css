@@ -204,6 +204,25 @@ video {
   border-color: #00ff88;
 }
 
+.name-ocr-rect {
+  display: none;
+  position: absolute;
+  left: 5%;
+  top: 4%;
+  width: 90%;
+  height: 12%;
+  border: 2px dashed rgba(255, 210, 64, 0.95);
+  border-radius: 10px;
+  pointer-events: none;
+  transition: border-color 180ms ease, opacity 180ms ease;
+  opacity: 0.9;
+}
+
+.name-ocr-rect.active {
+  display: block;
+  border-color: rgba(255, 210, 64, 1);
+}
+
 .scan-preview {
   position: absolute;
   top: 12px;
