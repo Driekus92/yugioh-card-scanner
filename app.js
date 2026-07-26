@@ -296,16 +296,32 @@ async function fetchCardInfo(code, detectedName) {
   if (exactResult) {
     // If we have exact matches (set_code equality)
     if (exactResult.exactMatches && exactResult.exactMatches.length) {
-      // If a detectedName was provided, prefer a card whose name matches exactly (case-insensitive)
+      // If a detectedName was provided, prefer a card whose name matches (normalized exact first, then fuzzy)
       if (detectedName) {
-        const nameNorm = (detectedName || '').trim().toLowerCase();
-        const nameMatch = exactResult.exactMatches.find(e => (e.card && e.card.name && e.card.name.trim().toLowerCase()) === nameNorm);
-        if (nameMatch) {
-          console.log('fetchCardInfo: exact set_code and name match for', norm, nameMatch.matchedCode);
-          logMessage('Database lookup: exact match (name confirmed)');
-          const card = nameMatch.card;
-          const matched = nameMatch.matched || {};
-          return { name: card.name || 'Unknown', setName: matched.set_name || '', rarity: matched.set_rarity || '', image: (card.card_images && card.card_images[0] && card.card_images[0].image_url) || '', matchType: 'exact', matchedCode: nameMatch.matchedCode, confidence: 'high' };
+        let bestFuzzy = null;
+        for (const e of exactResult.exactMatches) {
+          const cardName = (e.card && e.card.name) || '';
+          const cmp = compareNames(detectedName, cardName);
+          if (cmp.exact) {
+            console.log('fetchCardInfo: exact set_code and exact name match for', norm, e.matchedCode);
+            logMessage('Database lookup: exact match (name confirmed)');
+            const card = e.card;
+            const matched = e.matched || {};
+            return { name: card.name || 'Unknown', setName: matched.set_name || '', rarity: matched.set_rarity || '', image: (card.card_images && card.card_images[0] && card.card_images[0].image_url) || '', matchType: 'exact-name', matchedCode: e.matchedCode, confidence: 'high' };
+          }
+          if (cmp.fuzzy) {
+            if (!bestFuzzy || cmp.similarity > bestFuzzy.similarity) {
+              bestFuzzy = { e, similarity: cmp.similarity };
+            }
+          }
+        }
+        if (bestFuzzy) {
+          const e = bestFuzzy.e;
+          console.log('fetchCardInfo: exact set_code and fuzzy name match for', norm, e.matchedCode);
+          logMessage('Database lookup: fuzzy name match (confirmed)');
+          const card = e.card;
+          const matched = e.matched || {};
+          return { name: card.name || 'Unknown', setName: matched.set_name || '', rarity: matched.set_rarity || '', image: (card.card_images && card.card_images[0] && card.card_images[0].image_url) || '', matchType: 'exact-fuzzy-name', matchedCode: e.matchedCode, confidence: 'high' };
         }
       }
 
@@ -352,6 +368,32 @@ async function fetchCardInfo(code, detectedName) {
   return { name: 'Unknown', setName: '', rarity: '', image: '', matchType: 'none', matchedCode: '', confidence: 'low' };
 }
 
+async function fetchCardsByName(name) {
+  if (!name) return null;
+  const endpointExact = `https://db.ygoprodeck.com/api/v7/cardinfo.php?name=${encodeURIComponent(name)}`;
+  try {
+    let response = await fetch(endpointExact);
+    if (response.ok) {
+      const json = await response.json();
+      if (json && Array.isArray(json.data) && json.data.length) return json.data;
+    }
+  } catch (e) {
+    console.warn('fetchCardsByName exact failed for', name, e);
+  }
+
+  // Try fuzzy name search (fname) as fallback
+  const endpointFuzzy = `https://db.ygoprodeck.com/api/v7/cardinfo.php?fname=${encodeURIComponent(name)}`;
+  try {
+    const response = await fetch(endpointFuzzy);
+    if (!response.ok) return null;
+    const json = await response.json();
+    if (json && Array.isArray(json.data) && json.data.length) return json.data;
+  } catch (e) {
+    console.warn('fetchCardsByName fuzzy failed for', name, e);
+  }
+  return null;
+}
+
 async function findBestSetCode(candidates) {
   for (const candidate of candidates) {
     const variants = generateSetCodeVariants(candidate);
@@ -376,6 +418,56 @@ function guessCardName(text) {
   });
   return candidates.length ? candidates[0] : '';
 }
+
+function normalizeCardName(name) {
+  if (!name) return '';
+  // Remove diacritics, punctuation (- ' : . ,) and collapse spaces, lowercase
+  try {
+    let s = name.normalize('NFD').replace(/\p{M}/gu, '');
+    s = s.replace(/[\-\'\:.,]/g, ' ');
+    s = s.replace(/[^\p{L}\p{N} ]+/gu, '');
+    s = s.replace(/\s+/g, ' ').trim().toLowerCase();
+    return s;
+  } catch (e) {
+    // Fallback if Unicode properties not supported
+    let s = name;
+    s = s.replace(/[\-\'\:.,]/g, ' ');
+    s = s.replace(/[^A-Za-z0-9 ]+/g, '');
+    s = s.replace(/\s+/g, ' ').trim().toLowerCase();
+    return s;
+  }
+}
+
+function levenshteinDistance(a, b) {
+  const an = a ? a.length : 0;
+  const bn = b ? b.length : 0;
+  if (an === 0) return bn;
+  if (bn === 0) return an;
+  const matrix = Array.from({ length: an + 1 }, () => new Array(bn + 1));
+  for (let i = 0; i <= an; i++) matrix[i][0] = i;
+  for (let j = 0; j <= bn; j++) matrix[0][j] = j;
+  for (let i = 1; i <= an; i++) {
+    const ai = a.charAt(i - 1);
+    for (let j = 1; j <= bn; j++) {
+      const bj = b.charAt(j - 1);
+      const cost = ai === bj ? 0 : 1;
+      matrix[i][j] = Math.min(matrix[i - 1][j] + 1, matrix[i][j - 1] + 1, matrix[i - 1][j - 1] + cost);
+    }
+  }
+  return matrix[an][bn];
+}
+
+function compareNames(a, b) {
+  const na = normalizeCardName(a || '');
+  const nb = normalizeCardName(b || '');
+  if (na === nb) return { exact: true, fuzzy: false, distance: 0, similarity: 1 };
+  const dist = levenshteinDistance(na, nb);
+  const maxLen = Math.max(na.length, nb.length) || 1;
+  const similarity = 1 - dist / maxLen;
+  const fuzzy = similarity >= 0.75; // threshold
+  return { exact: false, fuzzy, distance: dist, similarity };
+}
+
 
 async function loadImage(blob) {
   return new Promise((resolve, reject) => {
@@ -664,21 +756,80 @@ async function recognizeImage(blob) {
     const detectedName = await extractNameFromBlob(blob);
     if (detectedName) console.log('Detected name OCR:', detectedName);
 
-    const cardInfo = await fetchCardInfo(bestMatch, detectedName || undefined);
+    let cardInfo = null;
 
-    if (cardInfo.matchType === 'exact') {
-      console.log('Lookup path: exact');
-      logMessage('Lookup path: exact match');
-    } else if (cardInfo.matchType === 'normalized') {
-      console.log('Lookup path: normalized');
-      logMessage('Lookup path: normalized match');
+    // 1) If we have a detected name, search by name first
+    if (detectedName) {
+      const nameResults = await fetchCardsByName(detectedName);
+      if (nameResults && nameResults.length) {
+        // Try to filter by set code among the name results but prefer cards whose name matches the detected name
+        const variants = generateSetCodeVariants(bestMatch);
+        let matchedEntry = null;
+        let bestNameOnly = null; // best candidate by name similarity when no set match
+
+        for (const card of nameResults) {
+          const cardName = card.name || '';
+          const nameCmp = compareNames(detectedName, cardName);
+          // keep track of best name-only candidate
+          if (nameCmp.exact) {
+            bestNameOnly = { card, similarity: 1, exact: true };
+          } else if (nameCmp.fuzzy) {
+            if (!bestNameOnly || nameCmp.similarity > bestNameOnly.similarity) {
+              bestNameOnly = { card, similarity: nameCmp.similarity, exact: false };
+            }
+          }
+
+          // only consider set matches for cards that at least fuzzy-match the detected name
+          if (!nameCmp.exact && !nameCmp.fuzzy) continue;
+
+          const sets = card.card_sets || [];
+          for (const s of sets) {
+            const apiCode = (s.set_code || '').toUpperCase();
+            for (const v of variants) {
+              if (apiCode === v.toUpperCase()) {
+                matchedEntry = { card, matched: s, nameCmp };
+                break;
+              }
+            }
+            if (matchedEntry) break;
+          }
+          if (matchedEntry) break;
+        }
+
+        if (matchedEntry) {
+          // name + set match -> high confidence; if nameCmp was exact it's highest
+          const card = matchedEntry.card;
+          const matched = matchedEntry.matched || {};
+          cardInfo = { name: card.name || 'Unknown', setName: matched.set_name || '', rarity: matched.set_rarity || '', image: (card.card_images && card.card_images[0] && card.card_images[0].image_url) || '', matchType: 'name+set', confidence: 'high' };
+          console.log('Name-first lookup: name + set match');
+          logMessage('Lookup path: name + set (high confidence)');
+        } else if (bestNameOnly) {
+          // name-only match -> medium confidence (prefer exact normalized if available)
+          const card = bestNameOnly.card;
+          const matched = (card.card_sets && card.card_sets[0]) || null;
+          cardInfo = { name: card.name || 'Unknown', setName: matched ? matched.set_name : '', rarity: matched ? matched.set_rarity : '', image: (card.card_images && card.card_images[0] && card.card_images[0].image_url) || '', matchType: 'name-only', confidence: 'medium' };
+          console.log('Name-first lookup: name match only (no set match)');
+          logMessage('Lookup path: name-only (medium confidence)');
+        } else {
+          // no meaningful name matches, fall back to set-code lookup
+          console.log('Name-first lookup: no name matches, falling back to set-code lookup');
+          cardInfo = await fetchCardInfo(bestMatch, detectedName);
+        }
+      } else {
+        // No name matches — fall back to set-code-first lookup
+        console.log('Name-first lookup: no name matches, falling back to set-code lookup');
+        cardInfo = await fetchCardInfo(bestMatch, detectedName);
+      }
     } else {
-      console.log('Lookup path: none');
-      logMessage('Lookup path: no database match');
+      // No detected name — use set-code-first lookup
+      cardInfo = await fetchCardInfo(bestMatch, undefined);
     }
 
+    // Log matchType if available (internal only)
+    if (cardInfo && cardInfo.matchType) console.log('CardInfo.matchType:', cardInfo.matchType, 'confidence:', cardInfo.confidence);
+
     updateResult(`Detected ${bestMatch} — ${cardInfo.name || 'Unknown'} (${cardInfo.setName || edition})`);
-    // Always save the scan; if no DB match, name will be 'Unknown' and other fields empty
+    // Always save the scan; confidence handled internally
     addEntry(bestMatch, cardInfo.name || 'Unknown', rawText, edition, cardInfo.setName, cardInfo.rarity, cardInfo.image, cardInfo.confidence || 'low');
   } catch (error) {
     console.error(error);
