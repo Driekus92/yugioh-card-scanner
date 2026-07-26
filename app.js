@@ -746,13 +746,17 @@ async function recognizeImage(blob) {
       }
     });
 
-    alert('Set code OCR completed');
+    alert('Tesseract.recognize returned');
     const setText = (ocrResult.data.text || '').toUpperCase();
       console.log('recognizeImage: set code OCR returned');
+    alert('Set code OCR text parsed');
     const rawText = setText.trim();
+    alert('Set code OCR raw text ready');
     const codes = extractSetCodes(setText);
+    alert(`Extracted ${codes.length} code candidates`);
 
     if (codes.length === 0) {
+      alert('No set code detected');
       updateResult('No set code detected. Align the card so the bottom-right code is inside the box.');
       logMessage(`No valid set code found. OCR text: ${rawText.replace(/\n/g, ' ')}`);
       return;
@@ -760,22 +764,26 @@ async function recognizeImage(blob) {
 
     const bestMatch = await findBestSetCode(codes);
     if (!bestMatch) {
+      alert('No valid set code match found');
       updateResult('No valid set code match found. Try a clearer scan.');
       logMessage(`OCR text found but no database match: ${rawText.replace(/\n/g, ' ')}`);
       setScanIndicatorSuccess(false);
       return;
     }
 
+    alert('Best set code match found');
     const edition = detectEdition(rawText);
     logMessage('Set code found and validated against database. Fetching card info...');
     setScanIndicatorSuccess(true);
     showScanPreview(bestMatch);
+    alert('Showed scan preview');
 
     // detectedName is not yet extracted from OCR; pass undefined for now.
     // Run name OCR on the captured full image to provide an optional detected card name
     alert('Starting name OCR');
     console.log('recognizeImage: name OCR started');
     const detectedName = await extractNameFromBlob(blob);
+    alert(`Name OCR complete: ${detectedName ? 'found' : 'none'}`);
     alert('Starting database lookup');
     if (detectedName) console.log('Detected name OCR:', detectedName);
 
