@@ -751,12 +751,13 @@ async function recognizeImage(blob) {
       console.log('recognizeImage: set code OCR returned');
     alert('Set code OCR text parsed');
     const rawText = setText.trim();
+    alert(`OCR raw text: ${rawText.substring(0, 200)}`);
     alert('Set code OCR raw text ready');
     const codes = extractSetCodes(setText);
     alert(`Extracted ${codes.length} code candidates`);
 
     if (codes.length === 0) {
-      alert('No set code detected');
+      alert(`No set code detected. OCR text was:\n${rawText.substring(0, 200)}`);
       updateResult('No set code detected. Align the card so the bottom-right code is inside the box.');
       logMessage(`No valid set code found. OCR text: ${rawText.replace(/\n/g, ' ')}`);
       return;
