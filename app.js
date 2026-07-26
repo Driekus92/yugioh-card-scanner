@@ -688,6 +688,7 @@ async function extractNameFromBlob(blob) {
 }
 
 async function cropSetCodeBlob(blob) {
+  alert('cropSetCodeBlob() entered');
   const img = await loadImage(blob);
   const guideArea = getGuideCropRect();
   const cardX = guideArea ? guideArea.x : 0;
@@ -718,8 +719,11 @@ async function recognizeImage(blob) {
 
   try {
     console.log('recognizeImage: set code crop preparing');
+    alert('Cropping set code area');
     const codeCropBlob = await cropSetCodeBlob(blob);
+    alert('Set code crop ready');
     console.log('recognizeImage: set code image captured (blob)');
+    alert('Starting set code OCR');
     console.log('recognizeImage: set code OCR started');
     const ocrResult = await Tesseract.recognize(codeCropBlob, 'eng', {
       tessedit_char_whitelist: 'ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789-',
@@ -759,9 +763,10 @@ async function recognizeImage(blob) {
 
     // detectedName is not yet extracted from OCR; pass undefined for now.
     // Run name OCR on the captured full image to provide an optional detected card name
-      console.log('recognizeImage: name OCR started');
-      console.log('recognizeImage: database lookup by name started');
+    alert('Starting name OCR');
+    console.log('recognizeImage: name OCR started');
     const detectedName = await extractNameFromBlob(blob);
+    alert('Starting database lookup');
     if (detectedName) console.log('Detected name OCR:', detectedName);
 
     let cardInfo = null;
@@ -900,7 +905,7 @@ async function scanCard() {
         alert('Image captured');
         console.log('scanCard: image captured (blob)');
         try {
-          alert('Starting OCR');
+          alert('Calling recognizeImage');
           await recognizeImage(blob);
           resolve();
         } catch (e) {
