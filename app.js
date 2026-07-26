@@ -694,9 +694,9 @@ async function cropSetCodeBlob(blob) {
   const cardY = guideArea ? guideArea.y : 0;
   const cardWidth = guideArea ? guideArea.width : img.width;
   const cardHeight = guideArea ? guideArea.height : img.height;
-
-  const cropWidth = Math.max(180, Math.round(cardWidth * 0.30));
-  const cropHeight = Math.max(60, Math.round(cardHeight * 0.07));
+  // Slightly increase the crop to reduce movement sensitivity (≈ +13%)
+  const cropWidth = Math.max(180, Math.round(cardWidth * 0.34));
+  const cropHeight = Math.max(60, Math.round(cardHeight * 0.08));
   const x = Math.min(img.width - cropWidth, Math.max(0, Math.round(cardX + cardWidth * 0.65)));
   const y = Math.min(img.height - cropHeight, Math.max(0, Math.round(cardY + cardHeight * 0.72)));
 
@@ -711,11 +711,16 @@ async function cropSetCodeBlob(blob) {
 }
 
 async function recognizeImage(blob) {
+  alert('recognizeImage() entered');
   logMessage('Recognizing text, this may take a moment...');
   updateResult('Scanning the right-side set code area...');
+    console.log('recognizeImage: started');
 
   try {
+    console.log('recognizeImage: set code crop preparing');
     const codeCropBlob = await cropSetCodeBlob(blob);
+    console.log('recognizeImage: set code image captured (blob)');
+    console.log('recognizeImage: set code OCR started');
     const ocrResult = await Tesseract.recognize(codeCropBlob, 'eng', {
       tessedit_char_whitelist: 'ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789-',
       tessedit_pageseg_mode: 7,
@@ -729,6 +734,7 @@ async function recognizeImage(blob) {
     });
 
     const setText = (ocrResult.data.text || '').toUpperCase();
+      console.log('recognizeImage: set code OCR returned');
     const rawText = setText.trim();
     const codes = extractSetCodes(setText);
 
@@ -753,6 +759,8 @@ async function recognizeImage(blob) {
 
     // detectedName is not yet extracted from OCR; pass undefined for now.
     // Run name OCR on the captured full image to provide an optional detected card name
+      console.log('recognizeImage: name OCR started');
+      console.log('recognizeImage: database lookup by name started');
     const detectedName = await extractNameFromBlob(blob);
     if (detectedName) console.log('Detected name OCR:', detectedName);
 
@@ -811,6 +819,9 @@ async function recognizeImage(blob) {
           console.log('Name-first lookup: name match only (no set match)');
           logMessage('Lookup path: name-only (medium confidence)');
         } else {
+                    console.log('Name-first lookup: no name matches, falling back to set-code lookup');
+                    console.log('recognizeImage: database lookup by set code started');
+            console.log('recognizeImage: no detected name, database lookup by set code started');
           // no meaningful name matches, fall back to set-code lookup
           console.log('Name-first lookup: no name matches, falling back to set-code lookup');
           cardInfo = await fetchCardInfo(bestMatch, detectedName);
@@ -831,7 +842,10 @@ async function recognizeImage(blob) {
     updateResult(`Detected ${bestMatch} — ${cardInfo.name || 'Unknown'} (${cardInfo.setName || edition})`);
     // Always save the scan; confidence handled internally
     addEntry(bestMatch, cardInfo.name || 'Unknown', rawText, edition, cardInfo.setName, cardInfo.rarity, cardInfo.image, cardInfo.confidence || 'low');
+    if (cardInfo && cardInfo.matchType) console.log('CardInfo.matchType:', cardInfo.matchType, 'confidence:', cardInfo.confidence);
+    console.log('recognizeImage: card saved');
   } catch (error) {
+    alert(error.message || 'Unknown error');
     console.error(error);
     updateResult('OCR failed. Use a clear, well-lit photo of the card.');
     logMessage('An error occurred during text recognition.');
@@ -866,22 +880,37 @@ async function openCamera() {
 }
 
 async function scanCard() {
+  alert('scanCard() started');
   if (!stream) {
     logMessage('Open the camera first or upload an image.');
     return;
   }
 
+  console.log('scanCard: button pressed');
+
   canvas.width = video.videoWidth;
   canvas.height = video.videoHeight;
   const context = canvas.getContext('2d');
   context.drawImage(video, 0, 0, canvas.width, canvas.height);
+  console.log('scanCard: image drawn to canvas');
 
   return new Promise((resolve, reject) => {
     canvas.toBlob(async blob => {
       if (blob) {
-        await recognizeImage(blob);
-        resolve();
+        alert('Image captured');
+        console.log('scanCard: image captured (blob)');
+        try {
+          alert('Starting OCR');
+          await recognizeImage(blob);
+          resolve();
+        } catch (e) {
+          alert(e.message || 'Unknown error');
+          console.error('scanCard: recognizeImage error', e);
+          reject(e);
+        }
       } else {
+        alert('Unable to capture image.');
+        console.error('scanCard: unable to capture image blob');
         reject(new Error('Unable to capture image.'));
       }
     }, 'image/png');
@@ -900,7 +929,13 @@ function handleFileUpload(file) {
       context.drawImage(img, 0, 0);
       canvas.toBlob(async blob => {
         if (blob) {
-          await recognizeImage(blob);
+          console.log('handleFileUpload: image uploaded (blob)');
+          try {
+            await recognizeImage(blob);
+          } catch (e) {
+            console.error('handleFileUpload: recognizeImage error', e);
+            updateResult('OCR failed on uploaded image.');
+          }
         }
       }, 'image/png');
     };
