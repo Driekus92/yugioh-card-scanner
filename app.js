@@ -16,6 +16,7 @@ const scanIndicator = document.querySelector('.ocr-debug-rect');
 const nameRect = document.querySelector('.name-ocr-rect');
 const scanPreview = document.getElementById('scanPreview');
 const scanPreviewCode = document.getElementById('scanPreviewCode');
+const ocrCropPreviewCanvas = document.getElementById('ocrCropPreviewCanvas');
 const homeScreen = document.querySelector('.home-screen');
 const scannerScreen = document.querySelector('.scanner-screen');
 const entriesPanel = document.querySelector('.entries-panel');
@@ -26,9 +27,11 @@ let stream = null;
 let entries = JSON.parse(localStorage.getItem('ygoscanner_entries') || '[]');
 const DEBUG_NAME_OCR = true; // set to true to show the name-crop debug rectangle
 // Debug flags for OCR preview and comparison
-const DEBUG_OCR_PREVIEW = true; // set to true to show cropped images sent to OCR
-const DEBUG_OCR_COMPARE_PROCESSED = true; // set to true to run OCR on raw + processed crops for comparison
+const DEBUG_OCR_PREVIEW = false; // set to true to show cropped images sent to OCR
+const DEBUG_OCR_COMPARE_PROCESSED = false; // set to true to run OCR on raw + processed crops for comparison
 const DEBUG_OCR_SKIP_ENHANCE = false; // set to true to skip enhanceCroppedCanvas() (for comparison)
+
+// The visible OCR overlay is the single source of truth for the crop.
 
 function logMessage(message) {
   status.textContent = message;
@@ -476,14 +479,8 @@ function compareNames(a, b) {
 async function loadImage(blob) {
   return new Promise((resolve, reject) => {
     const img = new Image();
-    img.onload = () => {
-      alert('loadImage onload');
-      resolve(img);
-    };
-    img.onerror = () => {
-      alert('loadImage error');
-      reject(new Error('Image load failed'));
-    };
+    img.onload = () => resolve(img);
+    img.onerror = () => reject(new Error('Image load failed'));
     img.src = URL.createObjectURL(blob);
   });
 }
@@ -568,10 +565,10 @@ function isValidSetCode(code) {
   return /^[A-Z0-9]{2,6}-[A-Z0-9]{2,5}$/.test(code);
 }
 
-function getGuideCropRect() {
-  if (!video.videoWidth || !video.videoHeight || !guideWindow) return null;
+function getVideoDisplayMetrics() {
+  if (!video || !video.videoWidth || !video.videoHeight) return null;
+
   const videoRect = video.getBoundingClientRect();
-  const guideRect = guideWindow.getBoundingClientRect();
   if (!videoRect.width || !videoRect.height) return null;
 
   const scale = Math.max(videoRect.width / video.videoWidth, videoRect.height / video.videoHeight);
@@ -580,17 +577,37 @@ function getGuideCropRect() {
   const offsetX = Math.max(0, (video.videoWidth - sourceVisibleWidth) / 2);
   const offsetY = Math.max(0, (video.videoHeight - sourceVisibleHeight) / 2);
 
-  const x = Math.round((guideRect.left - videoRect.left) / scale + offsetX);
-  const y = Math.round((guideRect.top - videoRect.top) / scale + offsetY);
-  const width = Math.round(guideRect.width / scale);
-  const height = Math.round(guideRect.height / scale);
-
   return {
-    x: Math.max(0, Math.min(video.videoWidth, x)),
-    y: Math.max(0, Math.min(video.videoHeight, y)),
-    width: Math.min(video.videoWidth - x, width),
-    height: Math.min(video.videoHeight - y, height)
+    videoRect,
+    scale,
+    sourceVisibleWidth,
+    sourceVisibleHeight,
+    offsetX,
+    offsetY
   };
+}
+
+function getGuideCropRect() {
+  const rect = scanIndicator;
+  if (!rect || !video || !video.videoWidth || !video.videoHeight) return null;
+
+  const metrics = getVideoDisplayMetrics();
+  if (!metrics) return null;
+
+  const overlayRect = rect.getBoundingClientRect();
+  if (!overlayRect.width || !overlayRect.height) return null;
+
+  const relLeft = overlayRect.left - metrics.videoRect.left;
+  const relTop = overlayRect.top - metrics.videoRect.top;
+  const relWidth = overlayRect.width;
+  const relHeight = overlayRect.height;
+
+  const x = Math.max(0, Math.min(video.videoWidth, Math.round((relLeft / metrics.videoRect.width) * metrics.sourceVisibleWidth + metrics.offsetX)));
+  const y = Math.max(0, Math.min(video.videoHeight, Math.round((relTop / metrics.videoRect.height) * metrics.sourceVisibleHeight + metrics.offsetY)));
+  const width = Math.max(1, Math.min(video.videoWidth - x, Math.round((relWidth / metrics.videoRect.width) * metrics.sourceVisibleWidth)));
+  const height = Math.max(1, Math.min(video.videoHeight - y, Math.round((relHeight / metrics.videoRect.height) * metrics.sourceVisibleHeight)));
+
+  return { x, y, width, height, overlayRect };
 }
 
 async function cropCardBlob(blob) {
@@ -608,6 +625,16 @@ async function cropCardBlob(blob) {
   ctx.drawImage(img, x, y, cropWidth, cropHeight, 0, 0, cropWidth, cropHeight);
 
   return new Promise(resolve => tempCanvas.toBlob(resolve, 'image/png'));
+}
+
+function updateOcrCropOverlay() {
+  if (!scanIndicator) return;
+  scanIndicator.style.display = 'flex';
+  scanIndicator.style.position = 'absolute';
+  scanIndicator.style.border = '2px solid rgba(255, 255, 255, 0.95)';
+  scanIndicator.style.borderRadius = '12px';
+  scanIndicator.style.pointerEvents = 'none';
+  scanIndicator.textContent = 'OCR crop';
 }
 
 function showHomeScreen() {
@@ -753,33 +780,37 @@ async function extractNameFromBlob(blob) {
 }
 
 async function cropSetCodeBlob(blob) {
-  alert('cropSetCodeBlob() entered');
   const img = await loadImage(blob);
-  alert('loadImage returned');
   const guideArea = getGuideCropRect();
   const cardX = guideArea ? guideArea.x : 0;
   const cardY = guideArea ? guideArea.y : 0;
   const cardWidth = guideArea ? guideArea.width : img.width;
   const cardHeight = guideArea ? guideArea.height : img.height;
-  // Slightly increase the crop to reduce movement sensitivity (≈ +13%)
-  // Increase crop size and move it slightly up/left to target the set-code line
-  const cropWidth = Math.max(220, Math.round(cardWidth * 0.42));
-  const cropHeight = Math.max(80, Math.round(cardHeight * 0.14));
-  // Position the crop on the bottom-right area but a bit more centered vertically (upwards)
-  const x = Math.min(img.width - cropWidth, Math.max(0, Math.round(cardX + cardWidth * 0.60)));
-  const y = Math.min(img.height - cropHeight, Math.max(0, Math.round(cardY + cardHeight * 0.62)));
+  const cropRect = getGuideCropRect();
+  const cropWidthPx = cropRect ? cropRect.width : Math.max(220, Math.round(cardWidth * 0.42));
+  const cropHeightPx = cropRect ? cropRect.height : Math.max(80, Math.round(cardHeight * 0.14));
+  const x = cropRect ? cropRect.x : Math.min(img.width - cropWidthPx, Math.max(0, Math.round(cardX + cardWidth * 0.60)));
+  const y = cropRect ? cropRect.y : Math.min(img.height - cropHeightPx, Math.max(0, Math.round(cardY + cardHeight * 0.62)));
 
   // Raw canvas (unprocessed)
   const rawCanvas = document.createElement('canvas');
-  rawCanvas.width = cropWidth;
-  rawCanvas.height = cropHeight;
+  rawCanvas.width = cropWidthPx;
+  rawCanvas.height = cropHeightPx;
   const rawCtx = rawCanvas.getContext('2d');
-  rawCtx.drawImage(img, x, y, cropWidth, cropHeight, 0, 0, cropWidth, cropHeight);
+  rawCtx.drawImage(img, x, y, cropWidthPx, cropHeightPx, 0, 0, cropWidthPx, cropHeightPx);
+
+  if (ocrCropPreviewCanvas) {
+    const previewCtx = ocrCropPreviewCanvas.getContext('2d');
+    ocrCropPreviewCanvas.width = cropWidthPx;
+    ocrCropPreviewCanvas.height = cropHeightPx;
+    previewCtx.clearRect(0, 0, ocrCropPreviewCanvas.width, ocrCropPreviewCanvas.height);
+    previewCtx.drawImage(rawCanvas, 0, 0, cropWidthPx, cropHeightPx, 0, 0, ocrCropPreviewCanvas.width, ocrCropPreviewCanvas.height);
+  }
 
   // Processed canvas (may be enhanced)
   const procCanvas = document.createElement('canvas');
-  procCanvas.width = cropWidth;
-  procCanvas.height = cropHeight;
+  procCanvas.width = cropWidthPx;
+  procCanvas.height = cropHeightPx;
   const procCtx = procCanvas.getContext('2d');
   procCtx.drawImage(rawCanvas, 0, 0);
   if (!DEBUG_OCR_SKIP_ENHANCE) {
@@ -806,24 +837,19 @@ async function cropSetCodeBlob(blob) {
     }
   }
 
-  alert('cropSetCodeBlob complete');
-
   // Return both blobs when comparison requested, otherwise return processed blob
   if (DEBUG_OCR_COMPARE_PROCESSED) return { rawBlob, processedBlob: procBlob };
   return procBlob;
 }
 
 async function recognizeImage(blob) {
-  alert('recognizeImage() entered');
   logMessage('Recognizing text, this may take a moment...');
   updateResult('Scanning the right-side set code area...');
-    console.log('recognizeImage: started');
+  console.log('recognizeImage: started');
 
   try {
     console.log('recognizeImage: set code crop preparing');
-    alert('Cropping set code area');
     const cropResult = await cropSetCodeBlob(blob);
-    alert('Set code crop ready');
     console.log('recognizeImage: set code image captured (blob)');
     // cropResult may be a blob or an object { rawBlob, processedBlob }
     let rawCropBlob = null;
@@ -850,32 +876,24 @@ async function recognizeImage(blob) {
 
     if (DEBUG_OCR_COMPARE_PROCESSED && rawCropBlob) {
       try {
-        alert('Starting raw crop OCR (debug)');
         const rawRes = await Tesseract.recognize(rawCropBlob, 'eng', tesseractOpts);
         const rawText = (rawRes.data.text || '').toUpperCase().trim();
-        alert(`Raw crop OCR text:\n${rawText.substring(0,200)}`);
+        console.log('recognizeImage: raw crop OCR text', rawText.substring(0, 200));
       } catch (e) {
-        alert('Raw crop OCR failed: ' + (e && e.message ? e.message : e));
+        console.warn('Raw crop OCR failed', e);
       }
     }
 
-    alert('Starting set code OCR');
     console.log('recognizeImage: set code OCR started');
-    alert('Calling Tesseract.recognize');
     const ocrResult = await Tesseract.recognize(procCropBlob, 'eng', tesseractOpts);
 
-    alert('Tesseract.recognize returned');
     const setText = (ocrResult.data.text || '').toUpperCase();
-      console.log('recognizeImage: set code OCR returned');
-    alert('Set code OCR text parsed');
+    console.log('recognizeImage: set code OCR returned');
     const rawText = setText.trim();
-    alert(`OCR raw text: ${rawText.substring(0, 200)}`);
-    alert('Set code OCR raw text ready');
     const codes = extractSetCodes(setText);
-    alert(`Extracted ${codes.length} code candidates`);
+    console.log('recognizeImage: extracted code candidates', codes);
 
     if (codes.length === 0) {
-      alert(`No set code detected. OCR text was:\n${rawText.substring(0, 200)}`);
       updateResult('No set code detected. Align the card so the bottom-right code is inside the box.');
       logMessage(`No valid set code found. OCR text: ${rawText.replace(/\n/g, ' ')}`);
       return;
@@ -883,27 +901,22 @@ async function recognizeImage(blob) {
 
     const bestMatch = await findBestSetCode(codes);
     if (!bestMatch) {
-      alert('No valid set code match found');
       updateResult('No valid set code match found. Try a clearer scan.');
       logMessage(`OCR text found but no database match: ${rawText.replace(/\n/g, ' ')}`);
       setScanIndicatorSuccess(false);
       return;
     }
 
-    alert('Best set code match found');
     const edition = detectEdition(rawText);
     logMessage('Set code found and validated against database. Fetching card info...');
     setScanIndicatorSuccess(true);
     showScanPreview(bestMatch);
-    alert('Showed scan preview');
 
     // detectedName is not yet extracted from OCR; pass undefined for now.
     // Run name OCR on the captured full image to provide an optional detected card name
-    alert('Starting name OCR');
     console.log('recognizeImage: name OCR started');
     const detectedName = await extractNameFromBlob(blob);
-    alert(`Name OCR complete: ${detectedName ? 'found' : 'none'}`);
-    alert('Starting database lookup');
+    console.log('recognizeImage: name OCR complete', detectedName ? 'found' : 'none');
     if (detectedName) console.log('Detected name OCR:', detectedName);
 
     let cardInfo = null;
@@ -987,7 +1000,6 @@ async function recognizeImage(blob) {
     if (cardInfo && cardInfo.matchType) console.log('CardInfo.matchType:', cardInfo.matchType, 'confidence:', cardInfo.confidence);
     console.log('recognizeImage: card saved');
   } catch (error) {
-    alert(error.message || 'Unknown error');
     console.error(error);
     updateResult('OCR failed. Use a clear, well-lit photo of the card.');
     logMessage('An error occurred during text recognition.');
@@ -1013,6 +1025,7 @@ async function openCamera() {
     await video.play();
     enterFullscreenMode();
     resetScanIndicator();
+    requestAnimationFrame(() => updateOcrCropOverlay());
     logMessage('Camera open. Place the card inside the frame and tap Scan.');
   } catch (error) {
     console.error(error);
@@ -1022,7 +1035,6 @@ async function openCamera() {
 }
 
 async function scanCard() {
-  alert('scanCard() started');
   if (!stream) {
     logMessage('Open the camera first or upload an image.');
     return;
@@ -1039,10 +1051,8 @@ async function scanCard() {
   return new Promise((resolve, reject) => {
     canvas.toBlob(async blob => {
       if (blob) {
-        alert('Image captured');
         console.log('scanCard: image captured (blob)');
         try {
-          alert('Calling recognizeImage');
           await recognizeImage(blob);
           resolve();
         } catch (e) {
@@ -1051,7 +1061,6 @@ async function scanCard() {
           reject(e);
         }
       } else {
-        alert('Unable to capture image.');
         console.error('scanCard: unable to capture image blob');
         reject(new Error('Unable to capture image.'));
       }
@@ -1147,6 +1156,10 @@ function clearSheet() {
   logMessage('All entries removed.');
 }
 
+window.addEventListener('resize', () => updateOcrCropOverlay());
+window.addEventListener('orientationchange', () => setTimeout(updateOcrCropOverlay, 150));
+video.addEventListener('loadedmetadata', () => updateOcrCropOverlay());
+video.addEventListener('playing', () => updateOcrCropOverlay());
 openCameraBtn.addEventListener('click', openCamera);
 if (scanListBtn) scanListBtn.addEventListener('click', showEntriesPanel);
 captureBtn.addEventListener('click', scanCard);
