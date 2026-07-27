@@ -47,8 +47,9 @@
         <input id="fileInput" type="file" accept="image/*" capture="environment" hidden />
 
         <div class="preview">
-          <video id="video" playsinline autoplay muted></video>
-          <div class="camera-guide">
+          <div class="video-frame">
+            <video id="video" playsinline autoplay muted></video>
+            <div class="camera-guide">
             <div class="guide-window">
               <div class="ocr-debug-rect"></div>
               <div class="name-ocr-rect"></div>
@@ -56,9 +57,13 @@
             <div id="scanPreview" class="scan-preview" aria-live="polite">
               <span id="scanPreviewCode" class="scan-preview-text"></span>
             </div>
+            <div class="ocr-crop-preview-wrap">
+              <canvas id="ocrCropPreviewCanvas" class="ocr-crop-preview-canvas"></canvas>
+            </div>
             <div class="camera-actions">
               <button id="closeCameraBtn" class="close-camera" type="button">Close</button>
               <button id="scanBtn" class="scan-button" type="button">Scan Card</button>
+            </div>
             </div>
           </div>
           <canvas id="canvas" hidden></canvas>

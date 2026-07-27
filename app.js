@@ -844,14 +844,51 @@ async function cropSetCodeBlob(blob) {
 
 async function recognizeImage(blob) {
   logMessage('Recognizing text, this may take a moment...');
-  updateResult('Scanning the right-side set code area...');
-  console.log('recognizeImage: started');
+  updateResult('Scanning the card name area first...');
+  console.log('=== RECOGNITION PIPELINE START ===');
 
   try {
-    console.log('recognizeImage: set code crop preparing');
+    console.log('[1/9] Captured image received');
+
+    console.log('[2/9] Cropping card name area');
+    const nameCropBlob = await cropNameBlob(blob);
+
+    console.log('[3/9] OCR card name');
+    const nameOcrResult = await Tesseract.recognize(nameCropBlob, 'eng', {
+      tessedit_char_whitelist: "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789 '’-:,.()",
+      tessedit_pageseg_mode: 7,
+      logger: m => {
+        if (m.status && m.progress !== undefined) {
+          const percent = Math.round(m.progress * 100);
+          logMessage(`${m.status} (${percent}%)`);
+        }
+      }
+    });
+
+    let detectedName = (nameOcrResult.data.text || '').trim();
+    detectedName = detectedName.replace(/[\r\n]+/g, ' ');
+    detectedName = detectedName.replace(/[^A-Za-z0-9\u00C0-\u024F'’\-:\,\.\(\) ]+/g, '');
+    detectedName = detectedName.replace(/\s+/g, ' ').trim();
+
+    console.log('[4/9] Card name OCR result:', detectedName || '(none)');
+    if (!detectedName) {
+      updateResult('No card name detected. Try a clearer photo.');
+      logMessage('Name OCR did not return a usable card name.');
+      return;
+    }
+
+    console.log('[5/9] Searching YGOPRODeck by card name');
+    const nameResults = await fetchCardsByName(detectedName);
+    console.log('[6/9] Name search returned', nameResults ? nameResults.length : 0, 'printings');
+
+    if (!nameResults || !nameResults.length) {
+      updateResult('No matching card found by name.');
+      logMessage('Card name lookup returned no results.');
+      return;
+    }
+
+    console.log('[7/9] Cropping set code area');
     const cropResult = await cropSetCodeBlob(blob);
-    console.log('recognizeImage: set code image captured (blob)');
-    // cropResult may be a blob or an object { rawBlob, processedBlob }
     let rawCropBlob = null;
     let procCropBlob = null;
     if (cropResult && cropResult.rawBlob !== undefined) {
@@ -861,7 +898,6 @@ async function recognizeImage(blob) {
       procCropBlob = cropResult;
     }
 
-    // Optionally run OCR on the raw crop for comparison
     const tesseractOpts = {
       tessedit_char_whitelist: 'ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789-',
       tessedit_pageseg_mode: 7,
@@ -874,24 +910,13 @@ async function recognizeImage(blob) {
       }
     };
 
-    if (DEBUG_OCR_COMPARE_PROCESSED && rawCropBlob) {
-      try {
-        const rawRes = await Tesseract.recognize(rawCropBlob, 'eng', tesseractOpts);
-        const rawText = (rawRes.data.text || '').toUpperCase().trim();
-        console.log('recognizeImage: raw crop OCR text', rawText.substring(0, 200));
-      } catch (e) {
-        console.warn('Raw crop OCR failed', e);
-      }
-    }
-
-    console.log('recognizeImage: set code OCR started');
+    console.log('[8/9] OCR set code');
     const ocrResult = await Tesseract.recognize(procCropBlob, 'eng', tesseractOpts);
-
     const setText = (ocrResult.data.text || '').toUpperCase();
-    console.log('recognizeImage: set code OCR returned');
     const rawText = setText.trim();
     const codes = extractSetCodes(setText);
-    console.log('recognizeImage: extracted code candidates', codes);
+    console.log('[8/9] OCR set code result:', rawText || '(none)');
+    console.log('[8/9] Extracted set code candidates:', codes);
 
     if (codes.length === 0) {
       updateResult('No set code detected. Align the card so the bottom-right code is inside the box.');
@@ -899,6 +924,7 @@ async function recognizeImage(blob) {
       return;
     }
 
+    console.log('[9/9] Comparing detected set code with returned printings');
     const bestMatch = await findBestSetCode(codes);
     if (!bestMatch) {
       updateResult('No valid set code match found. Try a clearer scan.');
@@ -912,93 +938,57 @@ async function recognizeImage(blob) {
     setScanIndicatorSuccess(true);
     showScanPreview(bestMatch);
 
-    // detectedName is not yet extracted from OCR; pass undefined for now.
-    // Run name OCR on the captured full image to provide an optional detected card name
-    console.log('recognizeImage: name OCR started');
-    const detectedName = await extractNameFromBlob(blob);
-    console.log('recognizeImage: name OCR complete', detectedName ? 'found' : 'none');
-    if (detectedName) console.log('Detected name OCR:', detectedName);
+    const variants = generateSetCodeVariants(bestMatch);
+    let matchedEntry = null;
+    let bestNameOnly = null;
 
-    let cardInfo = null;
-
-    // 1) If we have a detected name, search by name first
-    if (detectedName) {
-      const nameResults = await fetchCardsByName(detectedName);
-      if (nameResults && nameResults.length) {
-        // Try to filter by set code among the name results but prefer cards whose name matches the detected name
-        const variants = generateSetCodeVariants(bestMatch);
-        let matchedEntry = null;
-        let bestNameOnly = null; // best candidate by name similarity when no set match
-
-        for (const card of nameResults) {
-          const cardName = card.name || '';
-          const nameCmp = compareNames(detectedName, cardName);
-          // keep track of best name-only candidate
-          if (nameCmp.exact) {
-            bestNameOnly = { card, similarity: 1, exact: true };
-          } else if (nameCmp.fuzzy) {
-            if (!bestNameOnly || nameCmp.similarity > bestNameOnly.similarity) {
-              bestNameOnly = { card, similarity: nameCmp.similarity, exact: false };
-            }
-          }
-
-          // only consider set matches for cards that at least fuzzy-match the detected name
-          if (!nameCmp.exact && !nameCmp.fuzzy) continue;
-
-          const sets = card.card_sets || [];
-          for (const s of sets) {
-            const apiCode = (s.set_code || '').toUpperCase();
-            for (const v of variants) {
-              if (apiCode === v.toUpperCase()) {
-                matchedEntry = { card, matched: s, nameCmp };
-                break;
-              }
-            }
-            if (matchedEntry) break;
-          }
-          if (matchedEntry) break;
+    for (const card of nameResults) {
+      const cardName = card.name || '';
+      const nameCmp = compareNames(detectedName, cardName);
+      if (nameCmp.exact) {
+        bestNameOnly = { card, similarity: 1, exact: true };
+      } else if (nameCmp.fuzzy) {
+        if (!bestNameOnly || nameCmp.similarity > bestNameOnly.similarity) {
+          bestNameOnly = { card, similarity: nameCmp.similarity, exact: false };
         }
-
-        if (matchedEntry) {
-          // name + set match -> high confidence; if nameCmp was exact it's highest
-          const card = matchedEntry.card;
-          const matched = matchedEntry.matched || {};
-          cardInfo = { name: card.name || 'Unknown', setName: matched.set_name || '', rarity: matched.set_rarity || '', image: (card.card_images && card.card_images[0] && card.card_images[0].image_url) || '', matchType: 'name+set', confidence: 'high' };
-          console.log('Name-first lookup: name + set match');
-          logMessage('Lookup path: name + set (high confidence)');
-        } else if (bestNameOnly) {
-          // name-only match -> medium confidence (prefer exact normalized if available)
-          const card = bestNameOnly.card;
-          const matched = (card.card_sets && card.card_sets[0]) || null;
-          cardInfo = { name: card.name || 'Unknown', setName: matched ? matched.set_name : '', rarity: matched ? matched.set_rarity : '', image: (card.card_images && card.card_images[0] && card.card_images[0].image_url) || '', matchType: 'name-only', confidence: 'medium' };
-          console.log('Name-first lookup: name match only (no set match)');
-          logMessage('Lookup path: name-only (medium confidence)');
-        } else {
-                    console.log('Name-first lookup: no name matches, falling back to set-code lookup');
-                    console.log('recognizeImage: database lookup by set code started');
-            console.log('recognizeImage: no detected name, database lookup by set code started');
-          // no meaningful name matches, fall back to set-code lookup
-          console.log('Name-first lookup: no name matches, falling back to set-code lookup');
-          cardInfo = await fetchCardInfo(bestMatch, detectedName);
-        }
-      } else {
-        // No name matches — fall back to set-code-first lookup
-        console.log('Name-first lookup: no name matches, falling back to set-code lookup');
-        cardInfo = await fetchCardInfo(bestMatch, detectedName);
       }
-    } else {
-      // No detected name — use set-code-first lookup
-      cardInfo = await fetchCardInfo(bestMatch, undefined);
+
+      if (!nameCmp.exact && !nameCmp.fuzzy) continue;
+
+      const sets = card.card_sets || [];
+      for (const s of sets) {
+        const apiCode = (s.set_code || '').toUpperCase();
+        for (const v of variants) {
+          if (apiCode === v.toUpperCase()) {
+            matchedEntry = { card, matched: s, nameCmp };
+            break;
+          }
+        }
+        if (matchedEntry) break;
+      }
+      if (matchedEntry) break;
     }
 
-    // Log matchType if available (internal only)
-    if (cardInfo && cardInfo.matchType) console.log('CardInfo.matchType:', cardInfo.matchType, 'confidence:', cardInfo.confidence);
+    let cardInfo = null;
+    if (matchedEntry) {
+      const card = matchedEntry.card;
+      const matched = matchedEntry.matched || {};
+      cardInfo = { name: card.name || 'Unknown', setName: matched.set_name || '', rarity: matched.set_rarity || '', image: (card.card_images && card.card_images[0] && card.card_images[0].image_url) || '', matchType: 'name+set', confidence: 'high' };
+      console.log('Matched card by name + set code');
+      logMessage('Lookup path: name + set (high confidence)');
+    } else if (bestNameOnly) {
+      const card = bestNameOnly.card;
+      const matched = (card.card_sets && card.card_sets[0]) || null;
+      cardInfo = { name: card.name || 'Unknown', setName: matched ? matched.set_name : '', rarity: matched ? matched.set_rarity : '', image: (card.card_images && card.card_images[0] && card.card_images[0].image_url) || '', matchType: 'name-only', confidence: 'medium' };
+      console.log('Matched card by name only');
+      logMessage('Lookup path: name-only (medium confidence)');
+    } else {
+      cardInfo = await fetchCardInfo(bestMatch, detectedName);
+    }
 
     updateResult(`Detected ${bestMatch} — ${cardInfo.name || 'Unknown'} (${cardInfo.setName || edition})`);
-    // Always save the scan; confidence handled internally
     addEntry(bestMatch, cardInfo.name || 'Unknown', rawText, edition, cardInfo.setName, cardInfo.rarity, cardInfo.image, cardInfo.confidence || 'low');
-    if (cardInfo && cardInfo.matchType) console.log('CardInfo.matchType:', cardInfo.matchType, 'confidence:', cardInfo.confidence);
-    console.log('recognizeImage: card saved');
+    console.log('=== RECOGNITION PIPELINE COMPLETE ===');
   } catch (error) {
     console.error(error);
     updateResult('OCR failed. Use a clear, well-lit photo of the card.');
