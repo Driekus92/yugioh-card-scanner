@@ -750,20 +750,33 @@ async function cropNameBlob(blob) {
   const cropWidth = Math.min(img.width - cropX, Math.round(cardWidth * 0.90));
   const cropHeight = Math.min(img.height - cropY, Math.max(30, Math.round(cardHeight * 0.12)));
 
+  console.log('[DEBUG] name crop geometry', {
+    sourceImageSize: { width: img.width, height: img.height },
+    guideArea,
+    crop: { x: cropX, y: cropY, width: cropWidth, height: cropHeight }
+  });
+
   const tempCanvas = document.createElement('canvas');
   tempCanvas.width = cropWidth;
   tempCanvas.height = cropHeight;
   const ctx = tempCanvas.getContext('2d');
   ctx.drawImage(img, cropX, cropY, cropWidth, cropHeight, 0, 0, cropWidth, cropHeight);
   preprocessNameCanvas(tempCanvas);
+  console.log('[DEBUG] name crop image sent to OCR', { width: tempCanvas.width, height: tempCanvas.height });
 
-  return new Promise(resolve => tempCanvas.toBlob(resolve, 'image/png'));
+  return new Promise(resolve => {
+    tempCanvas.toBlob(blob => {
+      console.log('[DEBUG] name crop blob ready', blob ? { size: blob.size, type: blob.type } : null);
+      resolve(blob);
+    }, 'image/png');
+  });
 }
 
 async function extractNameFromBlob(blob) {
   try {
     const nameBlob = await cropNameBlob(blob);
     if (!nameBlob) return '';
+    console.log('[DEBUG] running name OCR');
     const ocr = await Tesseract.recognize(nameBlob, 'eng', {
       tessedit_char_whitelist: "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789 '’-:,.()",
       tessedit_pageseg_mode: 7,
@@ -772,6 +785,7 @@ async function extractNameFromBlob(blob) {
     text = text.replace(/[\r\n]+/g, ' ');
     text = text.replace(/[^A-Za-z0-9\u00C0-\u024F'’\-:\,\.\(\) ]+/g, '');
     text = text.replace(/\s+/g, ' ').trim();
+    console.log('[DEBUG] name OCR result:', text || '(empty)');
     return text;
   } catch (e) {
     console.warn('Name OCR failed', e);
@@ -792,6 +806,13 @@ async function cropSetCodeBlob(blob) {
   const x = cropRect ? cropRect.x : Math.min(img.width - cropWidthPx, Math.max(0, Math.round(cardX + cardWidth * 0.60)));
   const y = cropRect ? cropRect.y : Math.min(img.height - cropHeightPx, Math.max(0, Math.round(cardY + cardHeight * 0.62)));
 
+  console.log('[DEBUG] set-code crop geometry', {
+    sourceImageSize: { width: img.width, height: img.height },
+    guideArea,
+    cropRect,
+    crop: { x, y, width: cropWidthPx, height: cropHeightPx }
+  });
+
   // Raw canvas (unprocessed)
   const rawCanvas = document.createElement('canvas');
   rawCanvas.width = cropWidthPx;
@@ -799,12 +820,15 @@ async function cropSetCodeBlob(blob) {
   const rawCtx = rawCanvas.getContext('2d');
   rawCtx.drawImage(img, x, y, cropWidthPx, cropHeightPx, 0, 0, cropWidthPx, cropHeightPx);
 
+  console.log('[DEBUG] set-code crop image sent to OCR', { width: cropWidthPx, height: cropHeightPx });
+
   if (ocrCropPreviewCanvas) {
     const previewCtx = ocrCropPreviewCanvas.getContext('2d');
     ocrCropPreviewCanvas.width = cropWidthPx;
     ocrCropPreviewCanvas.height = cropHeightPx;
     previewCtx.clearRect(0, 0, ocrCropPreviewCanvas.width, ocrCropPreviewCanvas.height);
     previewCtx.drawImage(rawCanvas, 0, 0, cropWidthPx, cropHeightPx, 0, 0, ocrCropPreviewCanvas.width, ocrCropPreviewCanvas.height);
+    console.log('[DEBUG] set-code crop preview drawn', { width: cropWidthPx, height: cropHeightPx });
   }
 
   // Processed canvas (may be enhanced)
@@ -818,8 +842,18 @@ async function cropSetCodeBlob(blob) {
   }
 
   // Convert canvases to blobs
-  const rawBlob = await new Promise(resolve => rawCanvas.toBlob(resolve, 'image/png'));
-  const procBlob = await new Promise(resolve => procCanvas.toBlob(resolve, 'image/png'));
+  const rawBlob = await new Promise(resolve => {
+    rawCanvas.toBlob(blob => {
+      console.log('[DEBUG] raw set-code crop blob ready', blob ? { size: blob.size, type: blob.type } : null);
+      resolve(blob);
+    }, 'image/png');
+  });
+  const procBlob = await new Promise(resolve => {
+    procCanvas.toBlob(blob => {
+      console.log('[DEBUG] processed set-code crop blob ready', blob ? { size: blob.size, type: blob.type } : null);
+      resolve(blob);
+    }, 'image/png');
+  });
 
   // Show preview images if enabled
   if (DEBUG_OCR_PREVIEW) {
@@ -854,6 +888,7 @@ async function recognizeImage(blob) {
     const nameCropBlob = await cropNameBlob(blob);
 
     console.log('[3/9] OCR card name');
+    console.log('[DEBUG] sending name crop to Tesseract', nameCropBlob ? { size: nameCropBlob.size, type: nameCropBlob.type } : null);
     const nameOcrResult = await Tesseract.recognize(nameCropBlob, 'eng', {
       tessedit_char_whitelist: "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789 '’-:,.()",
       tessedit_pageseg_mode: 7,
@@ -870,6 +905,7 @@ async function recognizeImage(blob) {
     detectedName = detectedName.replace(/[^A-Za-z0-9\u00C0-\u024F'’\-:\,\.\(\) ]+/g, '');
     detectedName = detectedName.replace(/\s+/g, ' ').trim();
 
+    console.log('[DEBUG] name OCR result:', detectedName || '(none)');
     console.log('[4/9] Card name OCR result:', detectedName || '(none)');
     if (!detectedName) {
       updateResult('No card name detected. Try a clearer photo.');
@@ -880,6 +916,13 @@ async function recognizeImage(blob) {
     console.log('[5/9] Searching YGOPRODeck by card name');
     const nameResults = await fetchCardsByName(detectedName);
     console.log('[6/9] Name search returned', nameResults ? nameResults.length : 0, 'printings');
+    console.log('[DEBUG] name search result count', nameResults ? nameResults.length : 0);
+    if (nameResults && nameResults.length) {
+      console.log('[DEBUG] name search sample', nameResults.slice(0, 5).map(card => ({
+        name: card.name,
+        setCodes: (card.card_sets || []).slice(0, 3).map(s => s.set_code)
+      })));
+    }
 
     if (!nameResults || !nameResults.length) {
       updateResult('No matching card found by name.');
@@ -911,10 +954,12 @@ async function recognizeImage(blob) {
     };
 
     console.log('[8/9] OCR set code');
+    console.log('[DEBUG] sending set-code crop to Tesseract', procCropBlob ? { size: procCropBlob.size, type: procCropBlob.type } : null);
     const ocrResult = await Tesseract.recognize(procCropBlob, 'eng', tesseractOpts);
     const setText = (ocrResult.data.text || '').toUpperCase();
     const rawText = setText.trim();
     const codes = extractSetCodes(setText);
+    console.log('[DEBUG] set-code OCR result:', rawText || '(none)');
     console.log('[8/9] OCR set code result:', rawText || '(none)');
     console.log('[8/9] Extracted set code candidates:', codes);
 
@@ -926,6 +971,7 @@ async function recognizeImage(blob) {
 
     console.log('[9/9] Comparing detected set code with returned printings');
     const bestMatch = await findBestSetCode(codes);
+    console.log('[DEBUG] best set-code candidate', bestMatch || '(none)');
     if (!bestMatch) {
       updateResult('No valid set code match found. Try a clearer scan.');
       logMessage(`OCR text found but no database match: ${rawText.replace(/\n/g, ' ')}`);
@@ -986,6 +1032,18 @@ async function recognizeImage(blob) {
       cardInfo = await fetchCardInfo(bestMatch, detectedName);
     }
 
+    console.log('[DEBUG] final database match', {
+      bestMatch,
+      cardInfo,
+      detectedName,
+      rawSetCodeText: rawText,
+      matchedPrinting: matchedEntry ? {
+        name: matchedEntry.card && matchedEntry.card.name,
+        setCode: matchedEntry.matched && matchedEntry.matched.set_code,
+        setName: matchedEntry.matched && matchedEntry.matched.set_name,
+        rarity: matchedEntry.matched && matchedEntry.matched.set_rarity
+      } : null
+    });
     updateResult(`Detected ${bestMatch} — ${cardInfo.name || 'Unknown'} (${cardInfo.setName || edition})`);
     addEntry(bestMatch, cardInfo.name || 'Unknown', rawText, edition, cardInfo.setName, cardInfo.rarity, cardInfo.image, cardInfo.confidence || 'low');
     console.log('=== RECOGNITION PIPELINE COMPLETE ===');
@@ -1036,6 +1094,7 @@ async function scanCard() {
   canvas.height = video.videoHeight;
   const context = canvas.getContext('2d');
   context.drawImage(video, 0, 0, canvas.width, canvas.height);
+  console.log('[DEBUG] captured image resolution', { width: canvas.width, height: canvas.height });
   console.log('scanCard: image drawn to canvas');
 
   return new Promise((resolve, reject) => {
