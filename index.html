@@ -57,9 +57,6 @@
             <div id="scanPreview" class="scan-preview" aria-live="polite">
               <span id="scanPreviewCode" class="scan-preview-text"></span>
             </div>
-            <div class="ocr-crop-preview-wrap">
-              <canvas id="ocrCropPreviewCanvas" class="ocr-crop-preview-canvas"></canvas>
-            </div>
             <div class="camera-actions">
               <button id="closeCameraBtn" class="close-camera" type="button">Close</button>
               <button id="scanBtn" class="scan-button" type="button">Scan Card</button>
@@ -73,6 +70,17 @@
           <h2>Scan Result</h2>
           <div id="scanResult" class="result">No scan yet.</div>
           <div id="status" class="status">Ready.</div>
+          <div id="debugUi" class="debug-ui" aria-live="polite">
+            <div class="debug-ui-header">DEBUG_UI</div>
+            <div id="debugUiSteps" class="debug-ui-steps"></div>
+            <div class="debug-ui-preview-row">
+              <div class="debug-ui-preview-label">OCR crop preview</div>
+              <div class="ocr-crop-preview-wrap">
+                <canvas id="ocrCropPreviewCanvas" class="ocr-crop-preview-canvas"></canvas>
+              </div>
+            </div>
+            <div id="debugUiPreviewList" class="debug-ui-preview-list"></div>
+          </div>
         </div>
       </div>
     </section>

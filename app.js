@@ -22,10 +22,12 @@ const scannerScreen = document.querySelector('.scanner-screen');
 const entriesPanel = document.querySelector('.entries-panel');
 const entriesTableBody = document.querySelector('#entriesTable tbody');
 const scanListBack = document.getElementById('scanListBack');
+const debugUiSteps = document.getElementById('debugUiSteps');
+const debugUiPreviewList = document.getElementById('debugUiPreviewList');
 
 let stream = null;
 let entries = JSON.parse(localStorage.getItem('ygoscanner_entries') || '[]');
-const DEBUG_NAME_OCR = true; // set to true to show the name-crop debug rectangle
+const DEBUG_NAME_OCR = false; // keep the guide overlay hidden to avoid covering the scanner UI
 // Debug flags for OCR preview and comparison
 const DEBUG_OCR_PREVIEW = false; // set to true to show cropped images sent to OCR
 const DEBUG_OCR_COMPARE_PROCESSED = false; // set to true to run OCR on raw + processed crops for comparison
@@ -496,52 +498,46 @@ function showScanPreview(code) {
   scanPreview.classList.add('active');
 }
 
-// Show OCR preview images in the camera guide for debugging
+function renderDebugUiSteps() {
+  if (!debugUiSteps) return;
+  const ordered = Object.entries(window.__debugUiSteps || {}).sort((a, b) => Number(a[0]) - Number(b[0]));
+  debugUiSteps.innerHTML = ordered.map(([step, message]) => `
+    <div class="debug-ui-step">[${step}/8] ${message}</div>
+  `).join('');
+}
+
+function setDebugUiStep(step, message) {
+  if (!debugUiSteps) return;
+  if (!window.__debugUiSteps) window.__debugUiSteps = {};
+  window.__debugUiSteps[String(step)] = message;
+  renderDebugUiSteps();
+}
+
+function clearDebugUi() {
+  if (!window.__debugUiSteps) window.__debugUiSteps = {};
+  Object.keys(window.__debugUiSteps).forEach(key => delete window.__debugUiSteps[key]);
+  renderDebugUiSteps();
+}
+
 function showOcrPreview(rawUrl, processedUrl) {
   try {
-    let container = document.getElementById('ocrPreviewContainer');
-    if (!container) {
-      const guide = document.querySelector('.camera-guide');
-      container = document.createElement('div');
-      container.id = 'ocrPreviewContainer';
-      container.style.position = 'absolute';
-      container.style.right = '8px';
-      container.style.bottom = '8px';
-      container.style.zIndex = '9999';
-      container.style.display = 'flex';
-      container.style.gap = '6px';
-      guide.appendChild(container);
-    }
+    if (!debugUiPreviewList) return;
+    debugUiPreviewList.innerHTML = '';
 
-    // helper to create/update preview box
     const upsert = (id, url, label) => {
-      let box = document.getElementById(id);
-      if (!box) {
-        box = document.createElement('div');
-        box.id = id;
-        box.style.background = 'rgba(0,0,0,0.6)';
-        box.style.color = '#fff';
-        box.style.padding = '4px';
-        box.style.borderRadius = '6px';
-        box.style.width = '96px';
-        box.style.textAlign = 'center';
-        box.style.fontSize = '10px';
-        const img = document.createElement('img');
-        img.style.width = '88px';
-        img.style.height = '56px';
-        img.style.objectFit = 'cover';
-        img.id = id + '-img';
-        const lbl = document.createElement('div');
-        lbl.id = id + '-lbl';
-        lbl.style.marginTop = '4px';
-        box.appendChild(img);
-        box.appendChild(lbl);
-        container.appendChild(box);
-      }
-      const img = document.getElementById(id + '-img');
-      const lbl = document.getElementById(id + '-lbl');
-      if (url) img.src = url; else img.src = '';
+      const box = document.createElement('div');
+      box.className = 'debug-preview-box';
+      box.id = id;
+      const img = document.createElement('img');
+      img.id = `${id}-img`;
+      img.src = url || '';
+      img.alt = label || 'OCR preview';
+      const lbl = document.createElement('div');
+      lbl.className = 'debug-preview-box-label';
       lbl.textContent = label || '';
+      box.appendChild(img);
+      box.appendChild(lbl);
+      debugUiPreviewList.appendChild(box);
     };
 
     upsert('ocrPreviewRaw', rawUrl || '', 'Raw');
@@ -628,13 +624,13 @@ async function cropCardBlob(blob) {
 }
 
 function updateOcrCropOverlay() {
-  if (!scanIndicator) return;
-  scanIndicator.style.display = 'flex';
-  scanIndicator.style.position = 'absolute';
-  scanIndicator.style.border = '2px solid rgba(255, 255, 255, 0.95)';
-  scanIndicator.style.borderRadius = '12px';
-  scanIndicator.style.pointerEvents = 'none';
-  scanIndicator.textContent = 'OCR crop';
+  if (scanIndicator) {
+    scanIndicator.style.display = 'none';
+    scanIndicator.textContent = '';
+  }
+  if (nameRect) {
+    nameRect.classList.remove('active');
+  }
 }
 
 function showHomeScreen() {
@@ -663,7 +659,7 @@ function enterFullscreenMode() {
   document.body.style.overscrollBehavior = 'none';
   if (scanBtn) scanBtn.disabled = false;
   if (captureBtn) captureBtn.disabled = true;
-  if (nameRect) nameRect.classList.toggle('active', DEBUG_NAME_OCR);
+  updateOcrCropOverlay();
 }
 
 function exitFullscreenMode() {
@@ -672,7 +668,7 @@ function exitFullscreenMode() {
   document.body.style.touchAction = '';
   document.body.style.overscrollBehavior = '';
   if (captureBtn) captureBtn.disabled = false;
-  if (nameRect) nameRect.classList.remove('active');
+  updateOcrCropOverlay();
 }
 
 async function closeCamera() {
@@ -882,11 +878,14 @@ async function recognizeImage(blob) {
   console.log('=== RECOGNITION PIPELINE START ===');
 
   try {
+    setDebugUiStep(1, 'Image captured');
     console.log('[1/9] Captured image received');
 
+    setDebugUiStep(2, 'Name crop');
     console.log('[2/9] Cropping card name area');
     const nameCropBlob = await cropNameBlob(blob);
 
+    setDebugUiStep(3, `Name OCR: ${detectedName || '(none)'}`);
     console.log('[3/9] OCR card name');
     console.log('[DEBUG] sending name crop to Tesseract', nameCropBlob ? { size: nameCropBlob.size, type: nameCropBlob.type } : null);
     const nameOcrResult = await Tesseract.recognize(nameCropBlob, 'eng', {
@@ -913,6 +912,7 @@ async function recognizeImage(blob) {
       return;
     }
 
+    setDebugUiStep(4, `Name lookup: ${nameResults && nameResults.length ? `${nameResults.length} printings` : 'none'}`);
     console.log('[5/9] Searching YGOPRODeck by card name');
     const nameResults = await fetchCardsByName(detectedName);
     console.log('[6/9] Name search returned', nameResults ? nameResults.length : 0, 'printings');
@@ -930,6 +930,7 @@ async function recognizeImage(blob) {
       return;
     }
 
+    setDebugUiStep(5, 'Set code crop');
     console.log('[7/9] Cropping set code area');
     const cropResult = await cropSetCodeBlob(blob);
     let rawCropBlob = null;
@@ -953,6 +954,7 @@ async function recognizeImage(blob) {
       }
     };
 
+    setDebugUiStep(6, `Set code OCR: ${rawText || '(none)'}`);
     console.log('[8/9] OCR set code');
     console.log('[DEBUG] sending set-code crop to Tesseract', procCropBlob ? { size: procCropBlob.size, type: procCropBlob.type } : null);
     const ocrResult = await Tesseract.recognize(procCropBlob, 'eng', tesseractOpts);
@@ -969,6 +971,7 @@ async function recognizeImage(blob) {
       return;
     }
 
+    setDebugUiStep(7, `Matching: ${bestMatch || '(none)'}`);
     console.log('[9/9] Comparing detected set code with returned printings');
     const bestMatch = await findBestSetCode(codes);
     console.log('[DEBUG] best set-code candidate', bestMatch || '(none)');
@@ -1046,6 +1049,7 @@ async function recognizeImage(blob) {
     });
     updateResult(`Detected ${bestMatch} — ${cardInfo.name || 'Unknown'} (${cardInfo.setName || edition})`);
     addEntry(bestMatch, cardInfo.name || 'Unknown', rawText, edition, cardInfo.setName, cardInfo.rarity, cardInfo.image, cardInfo.confidence || 'low');
+    setDebugUiStep(8, `Saved: ${bestMatch || '(none)'}`);
     console.log('=== RECOGNITION PIPELINE COMPLETE ===');
   } catch (error) {
     console.error(error);
@@ -1089,6 +1093,8 @@ async function scanCard() {
   }
 
   console.log('scanCard: button pressed');
+  clearDebugUi();
+  setDebugUiStep(1, 'Image captured');
 
   canvas.width = video.videoWidth;
   canvas.height = video.videoHeight;
