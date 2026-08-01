@@ -318,6 +318,17 @@ video {
   color: #e2e8f0;
 }
 
+.ocr-name-preview {
+  display: block;
+  width: 100%;
+  max-height: 120px;
+  margin-top: 8px;
+  border-radius: 12px;
+  border: 1px solid rgba(125, 211, 252, 0.2);
+  background: #f8fafc;
+  object-fit: contain;
+}
+
 .camera-debug-row {
   display: grid;
   gap: 2px;

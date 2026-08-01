@@ -26,6 +26,7 @@ const cameraStatusOverlay = document.getElementById('cameraStatusOverlay');
 const cameraStatusText = document.getElementById('cameraStatusText');
 const cameraDebugOverlay = document.getElementById('cameraDebugOverlay');
 const cameraDebugBody = document.getElementById('cameraDebugBody');
+const ocrNamePreview = document.getElementById('ocrNamePreview');
 const debugInfoBody = document.getElementById('debugInfoBody');
 
 let stream = null;
@@ -36,6 +37,8 @@ let debugState = {
   ocrStarted: 'Not started',
   cardName: '—',
   setCode: '—',
+  ocrInputSize: '—',
+  ocrCrop: '—',
   apiCards: '—',
   apiQuery: '—',
   apiStatus: '—',
@@ -45,8 +48,10 @@ let debugState = {
 };
 
 const OCR_NAME_PROFILE = {
-  scale: 2,
-  contrast: 0.45,
+  scale: 3,
+  contrast: 0.8,
+  threshold: 0.58,
+  sharpen: true,
   whitelist: "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789 '’-:,.()"
 };
 
@@ -117,6 +122,8 @@ function getDebugRows() {
     ['Image', debugState.imageDimensions],
     ['OCR started', debugState.ocrStarted],
     ['OCR card name', debugState.cardName],
+    ['OCR input size', debugState.ocrInputSize],
+    ['OCR crop', debugState.ocrCrop],
     ['Set code OCR', debugState.setCode],
     ['API query', debugState.apiQuery],
     ['API status', debugState.apiStatus],
@@ -158,6 +165,8 @@ function resetDebugInfo() {
     ocrStarted: 'Not started',
     cardName: '—',
     setCode: '—',
+    ocrInputSize: '—',
+    ocrCrop: '—',
     apiCards: '—',
     apiQuery: '—',
     apiStatus: '—',
@@ -406,6 +415,44 @@ function clamp(value, min, max) {
   return Math.min(max, Math.max(min, value));
 }
 
+function sharpenImageData(imageData) {
+  const width = imageData.width;
+  const height = imageData.height;
+  const data = imageData.data;
+  const output = new Uint8ClampedArray(data.length);
+  const kernel = [0, -1, 0, -1, 5, -1, 0, -1, 0];
+
+  for (let y = 1; y < height - 1; y += 1) {
+    for (let x = 1; x < width - 1; x += 1) {
+      const index = (y * width + x) * 4;
+      let sum = 0;
+      let offset = 0;
+      for (let ky = -1; ky <= 1; ky += 1) {
+        for (let kx = -1; kx <= 1; kx += 1) {
+          const sourceIndex = ((y + ky) * width + (x + kx)) * 4;
+          sum += data[sourceIndex] * kernel[offset];
+          offset += 1;
+        }
+      }
+      const value = clamp(sum, 0, 255);
+      output[index] = value;
+      output[index + 1] = value;
+      output[index + 2] = value;
+      output[index + 3] = data[index + 3];
+    }
+  }
+
+  for (let y = 1; y < height - 1; y += 1) {
+    for (let x = 1; x < width - 1; x += 1) {
+      const index = (y * width + x) * 4;
+      data[index] = output[index];
+      data[index + 1] = output[index + 1];
+      data[index + 2] = output[index + 2];
+      data[index + 3] = output[index + 3];
+    }
+  }
+}
+
 function preprocessCanvas(canvas, profile) {
   const width = Math.round(canvas.width * (profile.scale || 1));
   const height = Math.round(canvas.height * (profile.scale || 1));
@@ -416,14 +463,23 @@ function preprocessCanvas(canvas, profile) {
   const imageData = ctx.getImageData(0, 0, width, height);
   const data = imageData.data;
   const gain = 1 + (profile.contrast || 0);
+  const threshold = (profile.threshold ?? 0.5) * 255;
   for (let index = 0; index < data.length; index += 4) {
     const gray = Math.round(data[index] * 0.299 + data[index + 1] * 0.587 + data[index + 2] * 0.114);
     const adjusted = clamp(128 + (gray - 128) * gain, 0, 255);
-    data[index] = adjusted;
-    data[index + 1] = adjusted;
-    data[index + 2] = adjusted;
+    const binary = adjusted > threshold ? 255 : 0;
+    data[index] = binary;
+    data[index + 1] = binary;
+    data[index + 2] = binary;
   }
   ctx.putImageData(imageData, 0, 0);
+
+  if (profile.sharpen) {
+    const sharpened = ctx.getImageData(0, 0, width, height);
+    sharpenImageData(sharpened);
+    ctx.putImageData(sharpened, 0, 0);
+  }
+
   return outputCanvas;
 }
 
@@ -449,9 +505,9 @@ function getCaptureRegions(image) {
   return {
     name: {
       x: Math.round(width * 0.08),
-      y: Math.round(height * 0.06),
+      y: Math.round(height * 0.03),
       width: Math.round(width * 0.84),
-      height: Math.round(height * 0.18)
+      height: Math.round(height * 0.11)
     },
     setCode: {
       x: Math.round(width * 0.58),
@@ -471,8 +527,16 @@ function cropRegion(image, region) {
 
 async function readCardName(image) {
   const regions = getCaptureRegions(image);
-  const cropped = cropRegion(image, regions.name);
+  const region = regions.name;
+  const cropped = cropRegion(image, region);
   const processed = preprocessCanvas(cropped, OCR_NAME_PROFILE);
+  updateDebugInfo({
+    ocrInputSize: `${processed.width} × ${processed.height}`,
+    ocrCrop: `${region.x}, ${region.y}, ${region.width}, ${region.height}`
+  });
+  if (ocrNamePreview) {
+    ocrNamePreview.src = processed.toDataURL('image/png');
+  }
   const result = await Tesseract.recognize(processed, 'eng', {
     tessedit_char_whitelist: OCR_NAME_PROFILE.whitelist,
     tessedit_pageseg_mode: 7
