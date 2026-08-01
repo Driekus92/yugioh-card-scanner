@@ -22,6 +22,8 @@ const guideWindow = document.querySelector('.guide-window');
 const scanStageBadge = document.getElementById('scanStageBadge');
 const scanTopFeedback = document.getElementById('scanTopFeedback');
 const scanTopFeedbackText = document.getElementById('scanTopFeedbackText');
+const cameraStatusOverlay = document.getElementById('cameraStatusOverlay');
+const cameraStatusText = document.getElementById('cameraStatusText');
 const debugInfoBody = document.getElementById('debugInfoBody');
 
 let stream = null;
@@ -62,6 +64,10 @@ function setScanStage(message, tone = 'info') {
   if (status) {
     status.textContent = message;
   }
+  if (cameraStatusOverlay && cameraStatusText) {
+    cameraStatusText.textContent = message;
+    cameraStatusOverlay.className = `camera-status-overlay ${tone}`;
+  }
 }
 
 function resetScanFeedback() {
@@ -73,6 +79,9 @@ function resetScanFeedback() {
   }
   if (guideWindow) {
     guideWindow.classList.remove('success', 'error');
+  }
+  if (cameraStatusOverlay) {
+    cameraStatusOverlay.classList.remove('success', 'error');
   }
 }
 
@@ -578,13 +587,14 @@ async function recognizeImage(blob) {
   try {
     const image = await loadImage(blob);
     updateDebugInfo({ imageDimensions: `${image.width} × ${image.height}` });
-    setScanStage('OCR running', 'info');
+    setScanStage('Processing image', 'info');
     updateDebugInfo({ ocrStarted: 'Started', match: 'Running name OCR...' });
+    setScanStage('OCR: reading card name', 'info');
     const detectedName = await readCardName(image);
     if (!detectedName) {
       updateDebugInfo({ cardName: 'No text detected', match: 'No card name detected' });
       updateResult('No card name detected. Try a clearer photo.');
-      setScanStage('Scan failed', 'error');
+      setScanStage('Scan failed ✕', 'error');
       showScanFeedback('✕ Scan failed', 'error');
       return;
     }
@@ -596,23 +606,23 @@ async function recognizeImage(blob) {
     if (!cards.length) {
       updateDebugInfo({ match: 'No API cards returned for the name' });
       updateResult('No matching card found by name.');
-      setScanStage('Scan failed', 'error');
+      setScanStage('Scan failed ✕', 'error');
       showScanFeedback('✕ Scan failed', 'error');
       return;
     }
 
-    setScanStage('Reading set code', 'info');
+    setScanStage('OCR: reading set code', 'info');
     const { text: rawSetText, codes } = await readSetCode(image);
     updateDebugInfo({ setCode: codes.length ? codes.join(', ') : 'No set code detected' });
     if (!codes.length) {
       updateDebugInfo({ match: 'No set code detected' });
       updateResult('No set code detected. Align the code inside the guide.');
-      setScanStage('Scan failed', 'error');
+      setScanStage('Scan failed ✕', 'error');
       showScanFeedback('✕ Scan failed', 'error');
       return;
     }
 
-    setScanStage('Matching', 'info');
+    setScanStage('Matching printing', 'info');
     let bestMatch = null;
     for (const card of cards) {
       const nameComparison = compareNames(detectedName, card.name || '');
@@ -633,7 +643,7 @@ async function recognizeImage(blob) {
     if (!bestMatch) {
       updateDebugInfo({ match: 'No local match for the detected set code' });
       updateResult('No matching set code found locally.');
-      setScanStage('Scan failed', 'error');
+      setScanStage('Scan failed ✕', 'error');
       showScanFeedback('✕ Scan failed', 'error');
       return;
     }
@@ -653,13 +663,13 @@ async function recognizeImage(blob) {
     updateResult(`${matchedSetCode} — ${cardInfo.name || 'Unknown'} (${cardInfo.setName || edition})`);
     addEntry(matchedSetCode, cardInfo.name, rawSetText, edition, cardInfo.setName, cardInfo.rarity, cardInfo.image, 'high');
     showScanPreview(matchedSetCode);
-    setScanStage('Card saved', 'success');
+    setScanStage('Card saved ✓', 'success');
     showScanFeedback('✓ Card saved', 'success');
   } catch (error) {
     console.error(error);
     updateDebugInfo({ match: 'OCR failed before a match could be determined' });
     updateResult('OCR failed. Use a clear, well-lit photo of the card.');
-    setScanStage('Scan failed', 'error');
+    setScanStage('Scan failed ✕', 'error');
     showScanFeedback('✕ Scan failed', 'error');
   }
 }

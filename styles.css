@@ -243,6 +243,49 @@ video {
   color: #1f0b0b;
 }
 
+.camera-status-overlay {
+  position: absolute;
+  top: max(12px, env(safe-area-inset-top));
+  left: 50%;
+  transform: translateX(-50%);
+  min-width: min(86vw, 260px);
+  max-width: calc(100% - 24px);
+  padding: 8px 12px;
+  border-radius: 999px;
+  background: rgba(6, 13, 24, 0.8);
+  border: 1px solid rgba(255, 255, 255, 0.16);
+  color: #f8fafc;
+  font-size: 0.95rem;
+  font-weight: 700;
+  text-align: center;
+  letter-spacing: 0.04em;
+  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.26);
+  pointer-events: none;
+  z-index: 3;
+}
+
+.camera-status-overlay.info {
+  background: rgba(6, 13, 24, 0.8);
+  color: #f8fafc;
+}
+
+.camera-status-overlay.success {
+  background: rgba(29, 220, 122, 0.95);
+  color: #03210f;
+}
+
+.camera-status-overlay.error {
+  background: rgba(255, 107, 107, 0.95);
+  color: #1f0b0b;
+}
+
+.camera-status-text {
+  display: block;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
 .scan-preview {
   position: absolute;
   top: 12px;
