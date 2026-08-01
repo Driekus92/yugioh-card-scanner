@@ -1,4 +1,4 @@
-const CACHE_NAME = 'ygoscanner-cache-v2';
+const CACHE_NAME = 'ygoscanner-cache-v3';
 const ASSETS = [
   '.',
   'index.html',

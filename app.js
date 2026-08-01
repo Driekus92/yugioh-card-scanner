@@ -11,42 +11,46 @@ const scanResult = document.getElementById('scanResult');
 const status = document.getElementById('status');
 const scanBtn = document.getElementById('scanBtn');
 const closeCameraBtn = document.getElementById('closeCameraBtn');
-const guideWindow = document.querySelector('.guide-window');
-const scanIndicator = document.querySelector('.ocr-debug-rect');
-const nameRect = document.querySelector('.name-ocr-rect');
 const scanPreview = document.getElementById('scanPreview');
 const scanPreviewCode = document.getElementById('scanPreviewCode');
-const ocrCropPreviewCanvas = document.getElementById('ocrCropPreviewCanvas');
 const homeScreen = document.querySelector('.home-screen');
 const scannerScreen = document.querySelector('.scanner-screen');
 const entriesPanel = document.querySelector('.entries-panel');
 const entriesTableBody = document.querySelector('#entriesTable tbody');
 const scanListBack = document.getElementById('scanListBack');
-const debugUiSteps = document.getElementById('debugUiSteps');
-const debugUiPreviewList = document.getElementById('debugUiPreviewList');
 
 let stream = null;
 let entries = JSON.parse(localStorage.getItem('ygoscanner_entries') || '[]');
-const DEBUG_NAME_OCR = false; // keep the guide overlay hidden to avoid covering the scanner UI
-// Debug flags for OCR preview and comparison
-const DEBUG_OCR_PREVIEW = false; // set to true to show cropped images sent to OCR
-const DEBUG_OCR_COMPARE_PROCESSED = false; // set to true to run OCR on raw + processed crops for comparison
-const DEBUG_OCR_SKIP_ENHANCE = false; // set to true to skip enhanceCroppedCanvas() (for comparison)
+const DEBUG_UI = false;
 
-// The visible OCR overlay is the single source of truth for the crop.
+const OCR_NAME_PROFILE = {
+  scale: 2,
+  contrast: 0.45,
+  whitelist: "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789 '’-:,.()"
+};
+
+const OCR_SET_CODE_PROFILE = {
+  scale: 3,
+  contrast: 0.2,
+  whitelist: 'ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789-'
+};
 
 function logMessage(message) {
-  status.textContent = message;
+  if (status) {
+    status.textContent = message;
+  }
 }
 
 function updateResult(text) {
-  scanResult.textContent = text;
+  if (scanResult) {
+    scanResult.textContent = text;
+  }
 }
 
 function compareSetCodes(codeA, codeB) {
   const parse = code => {
-    const match = /^([A-Z0-9]{2,4})-(\d{3})$/.exec(code);
-    return match ? [match[1], Number(match[2])] : [code, 0];
+    const match = /^([A-Z0-9]{2,4})-(\d{3})$/.exec(code || '');
+    return match ? [match[1], Number(match[2])] : [String(code || ''), 0];
   };
   const [prefixA, numA] = parse(codeA);
   const [prefixB, numB] = parse(codeB);
@@ -63,11 +67,8 @@ function sortEntries() {
 }
 
 function detectEdition(text) {
-  const normalized = text.toUpperCase();
-  if (normalized.includes('1ST EDITION') || normalized.includes('FIRST EDITION')) {
-    return '1st Edition';
-  }
-  return 'Other';
+  const normalized = (text || '').toUpperCase();
+  return normalized.includes('1ST EDITION') || normalized.includes('FIRST EDITION') ? '1st Edition' : 'Other';
 }
 
 function saveEntries() {
@@ -102,7 +103,7 @@ function groupEntries() {
       map[key] = {
         setCode: entry.setCode,
         edition,
-        name: entry.name || entry.cardName || 'Unknown',
+        name: entry.name || 'Unknown',
         setName: entry.setName || '',
         rarity: entry.rarity || '',
         image: entry.image || '',
@@ -121,10 +122,10 @@ function groupEntries() {
     if (entry.rarity && entry.rarity.length > (map[key].rarity || '').length) {
       map[key].rarity = entry.rarity;
     }
-    if (entry.image && (map[key].image || '').length === 0) {
+    if (entry.image && !(map[key].image || '')) {
       map[key].image = entry.image;
     }
-    if (entry.rawText.length > map[key].rawText.length) {
+    if ((entry.rawText || '').length > (map[key].rawText || '').length) {
       map[key].rawText = entry.rawText;
     }
     if (entry.scannedAt > map[key].lastScannedAt) {
@@ -144,11 +145,12 @@ function groupEntries() {
 
 function renderEntries() {
   const groupedEntries = groupEntries();
+  if (!entriesTableBody) return;
   entriesTableBody.innerHTML = groupedEntries.map((entry, index) => `
     <tr>
       <td>${index + 1}</td>
       <td>${entry.setCode}</td>
-      <td>${entry.name || entry.cardName || 'Unknown'}</td>
+      <td>${entry.name || 'Unknown'}</td>
       <td>${entry.setName || ''}</td>
       <td>${entry.rarity || ''}</td>
       <td>${entry.edition}</td>
@@ -158,35 +160,8 @@ function renderEntries() {
   `).join('');
 }
 
-function extractSetCodes(text) {
-  const normalized = text
-    .toUpperCase()
-    .replace(/[\u2010\u2011\u2012\u2013\u2014\u2015]/g, '-')
-    .replace(/[\/\\]/g, '-')
-    .replace(/\s*[-–—]\s*/g, '-')
-    .replace(/\s+/g, ' ')
-    .replace(/([A-Z0-9]{2,6})\s+(\d{3,4})\b/g, '$1-$2')
-    .replace(/([A-Z0-9]{2,6})(\d{3,4})\b/g, '$1-$2')
-    .trim();
-
-  const regex = /\b([A-Z0-9]{2,6}-[A-Z0-9]{2,5})\b/g;
-  const codes = [];
-  let match;
-
-  while ((match = regex.exec(normalized)) !== null) {
-    const code = match[1];
-    if (code) {
-      codes.push(code);
-    }
-  }
-
-  return [...new Set(codes)];
-}
-
-const setCodeValidationCache = {};
-
 function normalizeSetCodeCandidate(code) {
-  let normalized = code
+  let normalized = (code || '')
     .toUpperCase()
     .replace(/[-–—]/g, '-')
     .replace(/[\/\\]/g, '-')
@@ -207,18 +182,20 @@ function normalizeSetCodeCandidate(code) {
       .replace(/[IL]/g, '1')
       .replace(/S/g, '5')
       .replace(/Z/g, '2');
-
     normalized = `${prefix}-${suffix}`;
   }
 
   return normalized.replace(/[^A-Z0-9-]/g, '');
 }
 
-function generateSetCodeVariants(code) {
+function isValidSetCode(code) {
+  return /^[A-Z0-9]{2,6}-[A-Z0-9]{2,5}$/.test(code || '');
+}
+
+function buildSetCodeVariants(code) {
   const normalized = normalizeSetCodeCandidate(code);
   const variants = new Set([normalized]);
   const parts = normalized.split('-', 2);
-
   if (parts.length === 2) {
     const [prefix, suffix] = parts;
     const fixedSuffix = suffix
@@ -226,270 +203,222 @@ function generateSetCodeVariants(code) {
       .replace(/[IL]/g, '1')
       .replace(/S/g, '5')
       .replace(/Z/g, '2');
-
     variants.add(`${prefix}-${fixedSuffix}`);
-
     if (/^\d{1,4}$/.test(fixedSuffix)) {
       variants.add(`${prefix}-${fixedSuffix.padStart(3, '0')}`);
     }
   }
-
   return [...variants].filter(isValidSetCode);
 }
 
-async function validateSetCodeWithApi(code) {
-  if (setCodeValidationCache[code] !== undefined) {
-    return setCodeValidationCache[code];
-  }
+function extractSetCodes(text) {
+  const cleaned = (text || '')
+    .toUpperCase()
+    .replace(/[\u2010\u2011\u2012\u2013\u2014\u2015]/g, '-')
+    .replace(/[^A-Z0-9-\s]/g, ' ')
+    .replace(/\s+/g, ' ')
+    .trim();
 
-  const endpoint = `https://db.ygoprodeck.com/api/v7/cardinfo.php?setcode=${encodeURIComponent(code)}`;
-  try {
-    const response = await fetch(endpoint);
-    if (!response.ok) {
-      setCodeValidationCache[code] = false;
-      return false;
+  const candidates = new Set();
+  const directMatches = cleaned.match(/[A-Z0-9]{2,6}-[A-Z0-9]{2,5}/g) || [];
+  directMatches.forEach(match => candidates.add(normalizeSetCodeCandidate(match)));
+
+  cleaned.split(/\s+/).forEach(token => {
+    const match = token.match(/^([A-Z0-9]{2,6})(\d{3,4})$/);
+    if (match) {
+      candidates.add(normalizeSetCodeCandidate(`${match[1]}-${match[2]}`));
     }
-
-    const json = await response.json();
-    const valid = Boolean(json && Array.isArray(json.data) && json.data.length > 0);
-    setCodeValidationCache[code] = valid;
-    return valid;
-  } catch (error) {
-    console.warn('Set code validation API failed for', code, error);
-    setCodeValidationCache[code] = false;
-    return false;
-  }
-}
-
-async function fetchCardInfo(code, detectedName) {
-  const norm = normalizeSetCodeCandidate(code);
-
-  function normalizeApiSetCode(s) {
-    if (!s) return '';
-    return s.toUpperCase().replace(/[^A-Z0-9-]/g, '');
-  }
-
-  // Helper to query the API for a specific variant and collect matches
-  async function queryVariant(variant) {
-    const endpoint = `https://db.ygoprodeck.com/api/v7/cardinfo.php?setcode=${encodeURIComponent(variant)}`;
-    try {
-      const response = await fetch(endpoint);
-      if (!response.ok) return null;
-      const json = await response.json();
-      if (!json || !Array.isArray(json.data) || !json.data.length) return null;
-
-      const exactMatches = [];
-      const containsMatches = [];
-
-      for (const card of json.data) {
-        const sets = card.card_sets || [];
-        for (const s of sets) {
-          const apiCode = normalizeApiSetCode(s.set_code);
-          if (apiCode === variant.toUpperCase()) {
-            exactMatches.push({ card, matched: s, matchedCode: s.set_code });
-          } else if (apiCode.includes(variant.toUpperCase())) {
-            containsMatches.push({ card, matched: s, matchedCode: s.set_code });
-          }
-        }
-      }
-
-      return { cards: json.data, exactMatches, containsMatches };
-    } catch (e) {
-      console.warn('fetchCardInfo query failed for', variant, e);
-      return null;
-    }
-  }
-
-  // 1) Try an exact search for the normalized candidate first
-  const exactResult = await queryVariant(norm);
-  if (exactResult) {
-    // If we have exact matches (set_code equality)
-    if (exactResult.exactMatches && exactResult.exactMatches.length) {
-      // If a detectedName was provided, prefer a card whose name matches (normalized exact first, then fuzzy)
-      if (detectedName) {
-        let bestFuzzy = null;
-        for (const e of exactResult.exactMatches) {
-          const cardName = (e.card && e.card.name) || '';
-          const cmp = compareNames(detectedName, cardName);
-          if (cmp.exact) {
-            console.log('fetchCardInfo: exact set_code and exact name match for', norm, e.matchedCode);
-            logMessage('Database lookup: exact match (name confirmed)');
-            const card = e.card;
-            const matched = e.matched || {};
-            return { name: card.name || 'Unknown', setName: matched.set_name || '', rarity: matched.set_rarity || '', image: (card.card_images && card.card_images[0] && card.card_images[0].image_url) || '', matchType: 'exact-name', matchedCode: e.matchedCode, confidence: 'high' };
-          }
-          if (cmp.fuzzy) {
-            if (!bestFuzzy || cmp.similarity > bestFuzzy.similarity) {
-              bestFuzzy = { e, similarity: cmp.similarity };
-            }
-          }
-        }
-        if (bestFuzzy) {
-          const e = bestFuzzy.e;
-          console.log('fetchCardInfo: exact set_code and fuzzy name match for', norm, e.matchedCode);
-          logMessage('Database lookup: fuzzy name match (confirmed)');
-          const card = e.card;
-          const matched = e.matched || {};
-          return { name: card.name || 'Unknown', setName: matched.set_name || '', rarity: matched.set_rarity || '', image: (card.card_images && card.card_images[0] && card.card_images[0].image_url) || '', matchType: 'exact-fuzzy-name', matchedCode: e.matchedCode, confidence: 'high' };
-        }
-      }
-
-      // No name provided or no name match – return first exact match with medium confidence
-      const first = exactResult.exactMatches[0];
-      console.log('fetchCardInfo: exact set_code match for', norm, first.matchedCode);
-      logMessage('Database lookup: exact match');
-      const card = first.card;
-      const matched = first.matched || {};
-      return { name: card.name || 'Unknown', setName: matched.set_name || '', rarity: matched.set_rarity || '', image: (card.card_images && card.card_images[0] && card.card_images[0].image_url) || '', matchType: 'exact', matchedCode: first.matchedCode, confidence: 'medium' };
-    }
-    // If API returned data but no exact set_code equality, keep note and continue to normalized attempts
-    console.log('fetchCardInfo: API returned results for', norm, 'but no exact set_code equality');
-  }
-
-  // 2) Try normalized/alternative variants (common OCR corrections)
-  const variants = generateSetCodeVariants(norm).filter(v => v !== norm);
-  for (const variant of variants) {
-    const r = await queryVariant(variant);
-    if (!r) continue;
-    if (r.exactMatches && r.exactMatches.length) {
-      // normalized variant exact match – treat as medium confidence (name match only raises to medium here per policy)
-      const first = r.exactMatches[0];
-      console.log('fetchCardInfo: normalized exact match for', variant, first.matchedCode);
-      logMessage('Database lookup: normalized match');
-      const card = first.card;
-      const matched = first.matched || {};
-      return { name: card.name || 'Unknown', setName: matched.set_name || '', rarity: matched.set_rarity || '', image: (card.card_images && card.card_images[0] && card.card_images[0].image_url) || '', matchType: 'normalized', matchedCode: first.matchedCode, confidence: 'medium' };
-    }
-    // contains-match fallback
-    if (r.containsMatches && r.containsMatches.length) {
-      const first = r.containsMatches[0];
-      console.log('fetchCardInfo: normalized contains-match for', variant, first.matchedCode);
-      logMessage('Database lookup: normalized match (contains)');
-      const card = first.card;
-      const matched = first.matched || {};
-      return { name: card.name || 'Unknown', setName: matched.set_name || '', rarity: matched.set_rarity || '', image: (card.card_images && card.card_images[0] && card.card_images[0].image_url) || '', matchType: 'normalized', matchedCode: first.matchedCode, confidence: 'medium' };
-    }
-  }
-
-  // 3) No match found — do not fail the scan; return minimal info and indicate none
-  console.log('fetchCardInfo: no database match for', norm);
-  logMessage('Database lookup: no database match');
-  return { name: 'Unknown', setName: '', rarity: '', image: '', matchType: 'none', matchedCode: '', confidence: 'low' };
-}
-
-async function fetchCardsByName(name) {
-  if (!name) return null;
-  const endpointExact = `https://db.ygoprodeck.com/api/v7/cardinfo.php?name=${encodeURIComponent(name)}`;
-  try {
-    let response = await fetch(endpointExact);
-    if (response.ok) {
-      const json = await response.json();
-      if (json && Array.isArray(json.data) && json.data.length) return json.data;
-    }
-  } catch (e) {
-    console.warn('fetchCardsByName exact failed for', name, e);
-  }
-
-  // Try fuzzy name search (fname) as fallback
-  const endpointFuzzy = `https://db.ygoprodeck.com/api/v7/cardinfo.php?fname=${encodeURIComponent(name)}`;
-  try {
-    const response = await fetch(endpointFuzzy);
-    if (!response.ok) return null;
-    const json = await response.json();
-    if (json && Array.isArray(json.data) && json.data.length) return json.data;
-  } catch (e) {
-    console.warn('fetchCardsByName fuzzy failed for', name, e);
-  }
-  return null;
-}
-
-async function findBestSetCode(candidates) {
-  for (const candidate of candidates) {
-    const variants = generateSetCodeVariants(candidate);
-    for (const variant of variants) {
-      if (await validateSetCodeWithApi(variant)) {
-        return variant;
-      }
-    }
-  }
-  return null;
-}
-
-function guessCardName(text) {
-  const disallowed = ['DECK', 'SET', 'CARD', 'YU-GI-OH', 'MONSTER', 'SPELL', 'TRAP', 'ATTACK', 'DEFENSE', 'LEVEL', 'ATK', 'DEF', 'LP'];
-  const lines = text.split(/\r?\n/).map(line => line.trim()).filter(Boolean);
-  const candidates = lines.filter(line => {
-    if (line.length < 3 || line.length > 40) return false;
-    if (/^[0-9]+$/.test(line)) return false;
-    if (/\b[A-Z0-9]{2,4}-\d{3,4}\b/.test(line.toUpperCase())) return false;
-    const upper = line.toUpperCase();
-    return !disallowed.some(token => upper.includes(token));
   });
-  return candidates.length ? candidates[0] : '';
+
+  return [...candidates].filter(isValidSetCode);
 }
 
 function normalizeCardName(name) {
   if (!name) return '';
-  // Remove diacritics, punctuation (- ' : . ,) and collapse spaces, lowercase
   try {
-    let s = name.normalize('NFD').replace(/\p{M}/gu, '');
-    s = s.replace(/[\-\'\:.,]/g, ' ');
-    s = s.replace(/[^\p{L}\p{N} ]+/gu, '');
-    s = s.replace(/\s+/g, ' ').trim().toLowerCase();
-    return s;
-  } catch (e) {
-    // Fallback if Unicode properties not supported
-    let s = name;
-    s = s.replace(/[\-\'\:.,]/g, ' ');
-    s = s.replace(/[^A-Za-z0-9 ]+/g, '');
-    s = s.replace(/\s+/g, ' ').trim().toLowerCase();
-    return s;
+    let cleaned = name.normalize('NFD').replace(/\p{M}/gu, '');
+    cleaned = cleaned.replace(/[\-'\:.,]/g, ' ');
+    cleaned = cleaned.replace(/[^\p{L}\p{N} ]+/gu, '');
+    return cleaned.replace(/\s+/g, ' ').trim().toLowerCase();
+  } catch (error) {
+    return name.replace(/[\-'\:.,]/g, ' ').replace(/[^A-Za-z0-9 ]+/g, '').replace(/\s+/g, ' ').trim().toLowerCase();
   }
 }
 
 function levenshteinDistance(a, b) {
-  const an = a ? a.length : 0;
-  const bn = b ? b.length : 0;
-  if (an === 0) return bn;
-  if (bn === 0) return an;
-  const matrix = Array.from({ length: an + 1 }, () => new Array(bn + 1));
-  for (let i = 0; i <= an; i++) matrix[i][0] = i;
-  for (let j = 0; j <= bn; j++) matrix[0][j] = j;
-  for (let i = 1; i <= an; i++) {
-    const ai = a.charAt(i - 1);
-    for (let j = 1; j <= bn; j++) {
-      const bj = b.charAt(j - 1);
-      const cost = ai === bj ? 0 : 1;
+  const left = a ? a.length : 0;
+  const right = b ? b.length : 0;
+  if (left === 0) return right;
+  if (right === 0) return left;
+  const matrix = Array.from({ length: left + 1 }, () => new Array(right + 1));
+  for (let i = 0; i <= left; i++) matrix[i][0] = i;
+  for (let j = 0; j <= right; j++) matrix[0][j] = j;
+  for (let i = 1; i <= left; i++) {
+    const charA = a.charAt(i - 1);
+    for (let j = 1; j <= right; j++) {
+      const charB = b.charAt(j - 1);
+      const cost = charA === charB ? 0 : 1;
       matrix[i][j] = Math.min(matrix[i - 1][j] + 1, matrix[i][j - 1] + 1, matrix[i - 1][j - 1] + cost);
     }
   }
-  return matrix[an][bn];
+  return matrix[left][right];
 }
 
 function compareNames(a, b) {
-  const na = normalizeCardName(a || '');
-  const nb = normalizeCardName(b || '');
-  if (na === nb) return { exact: true, fuzzy: false, distance: 0, similarity: 1 };
-  const dist = levenshteinDistance(na, nb);
-  const maxLen = Math.max(na.length, nb.length) || 1;
-  const similarity = 1 - dist / maxLen;
-  const fuzzy = similarity >= 0.75; // threshold
-  return { exact: false, fuzzy, distance: dist, similarity };
+  const left = normalizeCardName(a || '');
+  const right = normalizeCardName(b || '');
+  if (left === right) return { exact: true, fuzzy: false, distance: 0, similarity: 1 };
+  const distance = levenshteinDistance(left, right);
+  const maxLen = Math.max(left.length, right.length) || 1;
+  const similarity = 1 - distance / maxLen;
+  return { exact: false, fuzzy: similarity >= 0.75, distance, similarity };
 }
 
+function createCanvas(width, height) {
+  const tempCanvas = document.createElement('canvas');
+  tempCanvas.width = width;
+  tempCanvas.height = height;
+  return tempCanvas;
+}
+
+function clamp(value, min, max) {
+  return Math.min(max, Math.max(min, value));
+}
+
+function preprocessCanvas(canvas, profile) {
+  const width = Math.round(canvas.width * (profile.scale || 1));
+  const height = Math.round(canvas.height * (profile.scale || 1));
+  const outputCanvas = createCanvas(width, height);
+  const ctx = outputCanvas.getContext('2d');
+  ctx.drawImage(canvas, 0, 0, width, height);
+
+  const imageData = ctx.getImageData(0, 0, width, height);
+  const data = imageData.data;
+  const gain = 1 + (profile.contrast || 0);
+  for (let index = 0; index < data.length; index += 4) {
+    const gray = Math.round(data[index] * 0.299 + data[index + 1] * 0.587 + data[index + 2] * 0.114);
+    const adjusted = clamp(128 + (gray - 128) * gain, 0, 255);
+    data[index] = adjusted;
+    data[index + 1] = adjusted;
+    data[index + 2] = adjusted;
+  }
+  ctx.putImageData(imageData, 0, 0);
+  return outputCanvas;
+}
 
 async function loadImage(blob) {
   return new Promise((resolve, reject) => {
+    const imageUrl = URL.createObjectURL(blob);
     const img = new Image();
-    img.onload = () => resolve(img);
-    img.onerror = () => reject(new Error('Image load failed'));
-    img.src = URL.createObjectURL(blob);
+    img.onload = () => {
+      URL.revokeObjectURL(imageUrl);
+      resolve(img);
+    };
+    img.onerror = () => {
+      URL.revokeObjectURL(imageUrl);
+      reject(new Error('Image load failed'));
+    };
+    img.src = imageUrl;
   });
 }
 
-function setScanIndicatorSuccess(active) {
-  if (!scanIndicator) return;
-  scanIndicator.classList.toggle('scan-success', active);
+function getCaptureRegions(image) {
+  const width = image.width;
+  const height = image.height;
+  return {
+    name: {
+      x: Math.round(width * 0.08),
+      y: Math.round(height * 0.06),
+      width: Math.round(width * 0.84),
+      height: Math.round(height * 0.18)
+    },
+    setCode: {
+      x: Math.round(width * 0.58),
+      y: Math.round(height * 0.72),
+      width: Math.round(width * 0.34),
+      height: Math.round(height * 0.12)
+    }
+  };
+}
+
+function cropRegion(image, region) {
+  const canvas = createCanvas(region.width, region.height);
+  const ctx = canvas.getContext('2d');
+  ctx.drawImage(image, region.x, region.y, region.width, region.height, 0, 0, region.width, region.height);
+  return canvas;
+}
+
+async function readCardName(image) {
+  const regions = getCaptureRegions(image);
+  const cropped = cropRegion(image, regions.name);
+  const processed = preprocessCanvas(cropped, OCR_NAME_PROFILE);
+  const result = await Tesseract.recognize(processed, 'eng', {
+    tessedit_char_whitelist: OCR_NAME_PROFILE.whitelist,
+    tessedit_pageseg_mode: 7
+  });
+  const text = (result.data.text || '').trim();
+  return text.replace(/[\r\n]+/g, ' ').replace(/[^A-Za-z0-9\u00C0-\u024F'’\-:\,\.\(\) ]+/g, '').replace(/\s+/g, ' ').trim();
+}
+
+async function readSetCode(image) {
+  const regions = getCaptureRegions(image);
+  const cropped = cropRegion(image, regions.setCode);
+  const processed = preprocessCanvas(cropped, OCR_SET_CODE_PROFILE);
+  const result = await Tesseract.recognize(processed, 'eng', {
+    tessedit_char_whitelist: OCR_SET_CODE_PROFILE.whitelist,
+    tessedit_pageseg_mode: 7
+  });
+  const text = (result.data.text || '').toUpperCase();
+  const codes = extractSetCodes(text);
+  return { text: text.trim(), codes };
+}
+
+async function fetchCardsByName(name) {
+  if (!name) return [];
+  const endpoint = `https://db.ygoprodeck.com/api/v7/cardinfo.php?name=${encodeURIComponent(name)}`;
+  try {
+    const response = await fetch(endpoint);
+    if (!response.ok) return [];
+    const json = await response.json();
+    return Array.isArray(json && json.data) ? json.data : [];
+  } catch (error) {
+    console.warn('Card lookup failed', error);
+    return [];
+  }
+}
+
+function findBestLocalMatch(codes, card) {
+  const printings = card.card_sets || [];
+  let bestMatch = null;
+
+  for (const code of codes) {
+    const variants = buildSetCodeVariants(code);
+    for (const printing of printings) {
+      const normalizedPrintingCode = normalizeSetCodeCandidate(printing.set_code || '');
+      for (const variant of variants) {
+        const normalizedVariant = normalizeSetCodeCandidate(variant);
+        if (!normalizedPrintingCode || !normalizedVariant) continue;
+        if (normalizedVariant === normalizedPrintingCode) {
+          const score = 2;
+          if (!bestMatch || score > bestMatch.score) {
+            bestMatch = { printing, score, code };
+          }
+          break;
+        }
+        if (normalizedVariant.includes(normalizedPrintingCode) || normalizedPrintingCode.includes(normalizedVariant)) {
+          const score = 1;
+          if (!bestMatch || score > bestMatch.score) {
+            bestMatch = { printing, score, code };
+          }
+        }
+      }
+      if (bestMatch && bestMatch.printing === printing) {
+        break;
+      }
+    }
+  }
+
+  return bestMatch;
 }
 
 function showScanPreview(code) {
@@ -498,139 +427,9 @@ function showScanPreview(code) {
   scanPreview.classList.add('active');
 }
 
-function renderDebugUiSteps() {
-  if (!debugUiSteps) return;
-  const ordered = Object.entries(window.__debugUiSteps || {}).sort((a, b) => Number(a[0]) - Number(b[0]));
-  debugUiSteps.innerHTML = ordered.map(([step, message]) => `
-    <div class="debug-ui-step">[${step}/8] ${message}</div>
-  `).join('');
-}
-
-function setDebugUiStep(step, message) {
-  if (!debugUiSteps) return;
-  if (!window.__debugUiSteps) window.__debugUiSteps = {};
-  window.__debugUiSteps[String(step)] = message;
-  renderDebugUiSteps();
-}
-
-function clearDebugUi() {
-  if (!window.__debugUiSteps) window.__debugUiSteps = {};
-  Object.keys(window.__debugUiSteps).forEach(key => delete window.__debugUiSteps[key]);
-  renderDebugUiSteps();
-}
-
-function showOcrPreview(rawUrl, processedUrl) {
-  try {
-    if (!debugUiPreviewList) return;
-    debugUiPreviewList.innerHTML = '';
-
-    const upsert = (id, url, label) => {
-      const box = document.createElement('div');
-      box.className = 'debug-preview-box';
-      box.id = id;
-      const img = document.createElement('img');
-      img.id = `${id}-img`;
-      img.src = url || '';
-      img.alt = label || 'OCR preview';
-      const lbl = document.createElement('div');
-      lbl.className = 'debug-preview-box-label';
-      lbl.textContent = label || '';
-      box.appendChild(img);
-      box.appendChild(lbl);
-      debugUiPreviewList.appendChild(box);
-    };
-
-    upsert('ocrPreviewRaw', rawUrl || '', 'Raw');
-    upsert('ocrPreviewProc', processedUrl || '', 'Processed');
-  } catch (e) {
-    console.warn('showOcrPreview failed', e);
-  }
-}
-
 function hideScanPreview() {
   if (!scanPreview) return;
   scanPreview.classList.remove('active');
-}
-
-function resetScanIndicator() {
-  setScanIndicatorSuccess(false);
-  hideScanPreview();
-}
-
-function isValidSetCode(code) {
-  return /^[A-Z0-9]{2,6}-[A-Z0-9]{2,5}$/.test(code);
-}
-
-function getVideoDisplayMetrics() {
-  if (!video || !video.videoWidth || !video.videoHeight) return null;
-
-  const videoRect = video.getBoundingClientRect();
-  if (!videoRect.width || !videoRect.height) return null;
-
-  const scale = Math.max(videoRect.width / video.videoWidth, videoRect.height / video.videoHeight);
-  const sourceVisibleWidth = videoRect.width / scale;
-  const sourceVisibleHeight = videoRect.height / scale;
-  const offsetX = Math.max(0, (video.videoWidth - sourceVisibleWidth) / 2);
-  const offsetY = Math.max(0, (video.videoHeight - sourceVisibleHeight) / 2);
-
-  return {
-    videoRect,
-    scale,
-    sourceVisibleWidth,
-    sourceVisibleHeight,
-    offsetX,
-    offsetY
-  };
-}
-
-function getGuideCropRect() {
-  const rect = scanIndicator;
-  if (!rect || !video || !video.videoWidth || !video.videoHeight) return null;
-
-  const metrics = getVideoDisplayMetrics();
-  if (!metrics) return null;
-
-  const overlayRect = rect.getBoundingClientRect();
-  if (!overlayRect.width || !overlayRect.height) return null;
-
-  const relLeft = overlayRect.left - metrics.videoRect.left;
-  const relTop = overlayRect.top - metrics.videoRect.top;
-  const relWidth = overlayRect.width;
-  const relHeight = overlayRect.height;
-
-  const x = Math.max(0, Math.min(video.videoWidth, Math.round((relLeft / metrics.videoRect.width) * metrics.sourceVisibleWidth + metrics.offsetX)));
-  const y = Math.max(0, Math.min(video.videoHeight, Math.round((relTop / metrics.videoRect.height) * metrics.sourceVisibleHeight + metrics.offsetY)));
-  const width = Math.max(1, Math.min(video.videoWidth - x, Math.round((relWidth / metrics.videoRect.width) * metrics.sourceVisibleWidth)));
-  const height = Math.max(1, Math.min(video.videoHeight - y, Math.round((relHeight / metrics.videoRect.height) * metrics.sourceVisibleHeight)));
-
-  return { x, y, width, height, overlayRect };
-}
-
-async function cropCardBlob(blob) {
-  const img = await loadImage(blob);
-  const guideArea = getGuideCropRect();
-  const cropWidth = guideArea ? guideArea.width : img.width;
-  const cropHeight = guideArea ? guideArea.height : img.height;
-  const x = guideArea ? guideArea.x : 0;
-  const y = guideArea ? guideArea.y : 0;
-
-  const tempCanvas = document.createElement('canvas');
-  tempCanvas.width = cropWidth;
-  tempCanvas.height = cropHeight;
-  const ctx = tempCanvas.getContext('2d');
-  ctx.drawImage(img, x, y, cropWidth, cropHeight, 0, 0, cropWidth, cropHeight);
-
-  return new Promise(resolve => tempCanvas.toBlob(resolve, 'image/png'));
-}
-
-function updateOcrCropOverlay() {
-  if (scanIndicator) {
-    scanIndicator.style.display = 'none';
-    scanIndicator.textContent = '';
-  }
-  if (nameRect) {
-    nameRect.classList.remove('active');
-  }
 }
 
 function showHomeScreen() {
@@ -659,7 +458,6 @@ function enterFullscreenMode() {
   document.body.style.overscrollBehavior = 'none';
   if (scanBtn) scanBtn.disabled = false;
   if (captureBtn) captureBtn.disabled = true;
-  updateOcrCropOverlay();
 }
 
 function exitFullscreenMode() {
@@ -668,7 +466,6 @@ function exitFullscreenMode() {
   document.body.style.touchAction = '';
   document.body.style.overscrollBehavior = '';
   if (captureBtn) captureBtn.disabled = false;
-  updateOcrCropOverlay();
 }
 
 async function closeCamera() {
@@ -676,385 +473,88 @@ async function closeCamera() {
     stream.getTracks().forEach(track => track.stop());
   }
   stream = null;
-  video.srcObject = null;
+  if (video) {
+    video.srcObject = null;
+  }
   exitFullscreenMode();
   showHomeScreen();
-  resetScanIndicator();
+  hideScanPreview();
   logMessage('Camera closed.');
 }
 
-function enhanceCroppedCanvas(canvas) {
-  const ctx = canvas.getContext('2d');
-  const imageData = ctx.getImageData(0, 0, canvas.width, canvas.height);
-  const data = imageData.data;
-  const contrast = 70;
-  const factor = (259 * (contrast + 255)) / (255 * (259 - contrast));
-
-  for (let i = 0; i < data.length; i += 4) {
-    const r = data[i];
-    const g = data[i + 1];
-    const b = data[i + 2];
-    const gray = Math.round(r * 0.299 + g * 0.587 + b * 0.114);
-    const contrasted = Math.min(255, Math.max(0, factor * (gray - 128) + 128));
-    const threshold = contrasted > 140 ? 255 : 0;
-    data[i] = data[i + 1] = data[i + 2] = threshold;
-  }
-
-  ctx.putImageData(imageData, 0, 0);
-}
-
-function preprocessNameCanvas(canvas) {
-  const ctx = canvas.getContext('2d');
-  const imageData = ctx.getImageData(0, 0, canvas.width, canvas.height);
-  const data = imageData.data;
-  const contrast = 80;
-  const factor = (259 * (contrast + 255)) / (255 * (259 - contrast));
-
-  for (let i = 0; i < data.length; i += 4) {
-    const r = data[i];
-    const g = data[i + 1];
-    const b = data[i + 2];
-    const gray = Math.round(r * 0.299 + g * 0.587 + b * 0.114);
-    const contrasted = Math.min(255, Math.max(0, factor * (gray - 128) + 128));
-    data[i] = data[i + 1] = data[i + 2] = contrasted;
-  }
-
-  ctx.putImageData(imageData, 0, 0);
-
-  // Apply a light threshold to improve OCR on text
-  const img = ctx.getImageData(0, 0, canvas.width, canvas.height);
-  const d = img.data;
-  const threshold = 120;
-  for (let i = 0; i < d.length; i += 4) {
-    const v = d[i];
-    const t = v > threshold ? 255 : 0;
-    d[i] = d[i + 1] = d[i + 2] = t;
-  }
-  ctx.putImageData(img, 0, 0);
-}
-
-async function cropNameBlob(blob) {
-  const img = await loadImage(blob);
-  const guideArea = getGuideCropRect();
-  const cardX = guideArea ? guideArea.x : 0;
-  const cardY = guideArea ? guideArea.y : 0;
-  const cardWidth = guideArea ? guideArea.width : img.width;
-  const cardHeight = guideArea ? guideArea.height : img.height;
-
-  const cropX = Math.min(img.width - 1, Math.max(0, Math.round(cardX + cardWidth * 0.05)));
-  const cropY = Math.min(img.height - 1, Math.max(0, Math.round(cardY + cardHeight * 0.04)));
-  const cropWidth = Math.min(img.width - cropX, Math.round(cardWidth * 0.90));
-  const cropHeight = Math.min(img.height - cropY, Math.max(30, Math.round(cardHeight * 0.12)));
-
-  console.log('[DEBUG] name crop geometry', {
-    sourceImageSize: { width: img.width, height: img.height },
-    guideArea,
-    crop: { x: cropX, y: cropY, width: cropWidth, height: cropHeight }
-  });
-
-  const tempCanvas = document.createElement('canvas');
-  tempCanvas.width = cropWidth;
-  tempCanvas.height = cropHeight;
-  const ctx = tempCanvas.getContext('2d');
-  ctx.drawImage(img, cropX, cropY, cropWidth, cropHeight, 0, 0, cropWidth, cropHeight);
-  preprocessNameCanvas(tempCanvas);
-  console.log('[DEBUG] name crop image sent to OCR', { width: tempCanvas.width, height: tempCanvas.height });
-
-  return new Promise(resolve => {
-    tempCanvas.toBlob(blob => {
-      console.log('[DEBUG] name crop blob ready', blob ? { size: blob.size, type: blob.type } : null);
-      resolve(blob);
-    }, 'image/png');
-  });
-}
-
-async function extractNameFromBlob(blob) {
-  try {
-    const nameBlob = await cropNameBlob(blob);
-    if (!nameBlob) return '';
-    console.log('[DEBUG] running name OCR');
-    const ocr = await Tesseract.recognize(nameBlob, 'eng', {
-      tessedit_char_whitelist: "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789 '’-:,.()",
-      tessedit_pageseg_mode: 7,
-    });
-    let text = (ocr.data.text || '').trim();
-    text = text.replace(/[\r\n]+/g, ' ');
-    text = text.replace(/[^A-Za-z0-9\u00C0-\u024F'’\-:\,\.\(\) ]+/g, '');
-    text = text.replace(/\s+/g, ' ').trim();
-    console.log('[DEBUG] name OCR result:', text || '(empty)');
-    return text;
-  } catch (e) {
-    console.warn('Name OCR failed', e);
-    return '';
-  }
-}
-
-async function cropSetCodeBlob(blob) {
-  const img = await loadImage(blob);
-  const guideArea = getGuideCropRect();
-  const cardX = guideArea ? guideArea.x : 0;
-  const cardY = guideArea ? guideArea.y : 0;
-  const cardWidth = guideArea ? guideArea.width : img.width;
-  const cardHeight = guideArea ? guideArea.height : img.height;
-  const cropRect = getGuideCropRect();
-  const cropWidthPx = cropRect ? cropRect.width : Math.max(220, Math.round(cardWidth * 0.42));
-  const cropHeightPx = cropRect ? cropRect.height : Math.max(80, Math.round(cardHeight * 0.14));
-  const x = cropRect ? cropRect.x : Math.min(img.width - cropWidthPx, Math.max(0, Math.round(cardX + cardWidth * 0.60)));
-  const y = cropRect ? cropRect.y : Math.min(img.height - cropHeightPx, Math.max(0, Math.round(cardY + cardHeight * 0.62)));
-
-  console.log('[DEBUG] set-code crop geometry', {
-    sourceImageSize: { width: img.width, height: img.height },
-    guideArea,
-    cropRect,
-    crop: { x, y, width: cropWidthPx, height: cropHeightPx }
-  });
-
-  // Raw canvas (unprocessed)
-  const rawCanvas = document.createElement('canvas');
-  rawCanvas.width = cropWidthPx;
-  rawCanvas.height = cropHeightPx;
-  const rawCtx = rawCanvas.getContext('2d');
-  rawCtx.drawImage(img, x, y, cropWidthPx, cropHeightPx, 0, 0, cropWidthPx, cropHeightPx);
-
-  console.log('[DEBUG] set-code crop image sent to OCR', { width: cropWidthPx, height: cropHeightPx });
-
-  if (ocrCropPreviewCanvas) {
-    const previewCtx = ocrCropPreviewCanvas.getContext('2d');
-    ocrCropPreviewCanvas.width = cropWidthPx;
-    ocrCropPreviewCanvas.height = cropHeightPx;
-    previewCtx.clearRect(0, 0, ocrCropPreviewCanvas.width, ocrCropPreviewCanvas.height);
-    previewCtx.drawImage(rawCanvas, 0, 0, cropWidthPx, cropHeightPx, 0, 0, ocrCropPreviewCanvas.width, ocrCropPreviewCanvas.height);
-    console.log('[DEBUG] set-code crop preview drawn', { width: cropWidthPx, height: cropHeightPx });
-  }
-
-  // Processed canvas (may be enhanced)
-  const procCanvas = document.createElement('canvas');
-  procCanvas.width = cropWidthPx;
-  procCanvas.height = cropHeightPx;
-  const procCtx = procCanvas.getContext('2d');
-  procCtx.drawImage(rawCanvas, 0, 0);
-  if (!DEBUG_OCR_SKIP_ENHANCE) {
-    enhanceCroppedCanvas(procCanvas);
-  }
-
-  // Convert canvases to blobs
-  const rawBlob = await new Promise(resolve => {
-    rawCanvas.toBlob(blob => {
-      console.log('[DEBUG] raw set-code crop blob ready', blob ? { size: blob.size, type: blob.type } : null);
-      resolve(blob);
-    }, 'image/png');
-  });
-  const procBlob = await new Promise(resolve => {
-    procCanvas.toBlob(blob => {
-      console.log('[DEBUG] processed set-code crop blob ready', blob ? { size: blob.size, type: blob.type } : null);
-      resolve(blob);
-    }, 'image/png');
-  });
-
-  // Show preview images if enabled
-  if (DEBUG_OCR_PREVIEW) {
-    try {
-      const rawUrl = URL.createObjectURL(rawBlob);
-      const procUrl = URL.createObjectURL(procBlob);
-      showOcrPreview(rawUrl, procUrl);
-      // Revoke URLs after a short delay to allow image load (keep lightweight)
-      setTimeout(() => {
-        try { URL.revokeObjectURL(rawUrl); } catch (e) {}
-        try { URL.revokeObjectURL(procUrl); } catch (e) {}
-      }, 5000);
-    } catch (e) {
-      console.warn('OCR preview failed', e);
-    }
-  }
-
-  // Return both blobs when comparison requested, otherwise return processed blob
-  if (DEBUG_OCR_COMPARE_PROCESSED) return { rawBlob, processedBlob: procBlob };
-  return procBlob;
-}
-
 async function recognizeImage(blob) {
-  logMessage('Recognizing text, this may take a moment...');
-  updateResult('Scanning the card name area first...');
-  console.log('=== RECOGNITION PIPELINE START ===');
+  logMessage('Capturing...');
+  updateResult('Scanning card...');
 
   try {
-    setDebugUiStep(1, 'Image captured');
-    console.log('[1/9] Captured image received');
-
-    setDebugUiStep(2, 'Name crop');
-    console.log('[2/9] Cropping card name area');
-    const nameCropBlob = await cropNameBlob(blob);
-
-    setDebugUiStep(3, `Name OCR: ${detectedName || '(none)'}`);
-    console.log('[3/9] OCR card name');
-    console.log('[DEBUG] sending name crop to Tesseract', nameCropBlob ? { size: nameCropBlob.size, type: nameCropBlob.type } : null);
-    const nameOcrResult = await Tesseract.recognize(nameCropBlob, 'eng', {
-      tessedit_char_whitelist: "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789 '’-:,.()",
-      tessedit_pageseg_mode: 7,
-      logger: m => {
-        if (m.status && m.progress !== undefined) {
-          const percent = Math.round(m.progress * 100);
-          logMessage(`${m.status} (${percent}%)`);
-        }
-      }
-    });
-
-    let detectedName = (nameOcrResult.data.text || '').trim();
-    detectedName = detectedName.replace(/[\r\n]+/g, ' ');
-    detectedName = detectedName.replace(/[^A-Za-z0-9\u00C0-\u024F'’\-:\,\.\(\) ]+/g, '');
-    detectedName = detectedName.replace(/\s+/g, ' ').trim();
-
-    console.log('[DEBUG] name OCR result:', detectedName || '(none)');
-    console.log('[4/9] Card name OCR result:', detectedName || '(none)');
+    const image = await loadImage(blob);
+    logMessage('Reading card name...');
+    const detectedName = await readCardName(image);
     if (!detectedName) {
       updateResult('No card name detected. Try a clearer photo.');
-      logMessage('Name OCR did not return a usable card name.');
+      logMessage('No card name detected.');
       return;
     }
 
-    setDebugUiStep(4, `Name lookup: ${nameResults && nameResults.length ? `${nameResults.length} printings` : 'none'}`);
-    console.log('[5/9] Searching YGOPRODeck by card name');
-    const nameResults = await fetchCardsByName(detectedName);
-    console.log('[6/9] Name search returned', nameResults ? nameResults.length : 0, 'printings');
-    console.log('[DEBUG] name search result count', nameResults ? nameResults.length : 0);
-    if (nameResults && nameResults.length) {
-      console.log('[DEBUG] name search sample', nameResults.slice(0, 5).map(card => ({
-        name: card.name,
-        setCodes: (card.card_sets || []).slice(0, 3).map(s => s.set_code)
-      })));
-    }
-
-    if (!nameResults || !nameResults.length) {
+    logMessage('Searching database...');
+    const cards = await fetchCardsByName(detectedName);
+    if (!cards.length) {
       updateResult('No matching card found by name.');
-      logMessage('Card name lookup returned no results.');
+      logMessage('No matching card found.');
       return;
     }
 
-    setDebugUiStep(5, 'Set code crop');
-    console.log('[7/9] Cropping set code area');
-    const cropResult = await cropSetCodeBlob(blob);
-    let rawCropBlob = null;
-    let procCropBlob = null;
-    if (cropResult && cropResult.rawBlob !== undefined) {
-      rawCropBlob = cropResult.rawBlob;
-      procCropBlob = cropResult.processedBlob;
-    } else {
-      procCropBlob = cropResult;
+    logMessage('Reading set code...');
+    const { text: rawSetText, codes } = await readSetCode(image);
+    if (!codes.length) {
+      updateResult('No set code detected. Align the code inside the guide.');
+      logMessage('No set code detected.');
+      return;
     }
 
-    const tesseractOpts = {
-      tessedit_char_whitelist: 'ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789-',
-      tessedit_pageseg_mode: 7,
-      preserve_interword_spaces: '0',
-      logger: m => {
-        if (m.status && m.progress !== undefined) {
-          const percent = Math.round(m.progress * 100);
-          logMessage(`${m.status} (${percent}%)`);
-        }
+    logMessage('Matching...');
+    let bestMatch = null;
+    for (const card of cards) {
+      const nameComparison = compareNames(detectedName, card.name || '');
+      const localMatch = findBestLocalMatch(codes, card);
+      if (!localMatch) continue;
+      const score = localMatch.score + (nameComparison.exact ? 2 : nameComparison.fuzzy ? 1 : 0);
+      if (!bestMatch || score > bestMatch.score || (score === bestMatch.score && (nameComparison.similarity || 0) > bestMatch.similarity)) {
+        bestMatch = {
+          card,
+          printing: localMatch.printing,
+          score,
+          similarity: nameComparison.similarity || 0,
+          rawSetText
+        };
       }
+    }
+
+    if (!bestMatch) {
+      updateResult('No matching set code found locally.');
+      logMessage('No matching set code found.');
+      return;
+    }
+
+    const edition = detectEdition(rawSetText);
+    const card = bestMatch.card;
+    const printing = bestMatch.printing || {};
+    const matchedSetCode = printing.set_code || '';
+    const cardInfo = {
+      name: card.name || 'Unknown',
+      setName: printing.set_name || '',
+      rarity: printing.set_rarity || '',
+      image: (card.card_images && card.card_images[0] && card.card_images[0].image_url) || ''
     };
 
-    setDebugUiStep(6, `Set code OCR: ${rawText || '(none)'}`);
-    console.log('[8/9] OCR set code');
-    console.log('[DEBUG] sending set-code crop to Tesseract', procCropBlob ? { size: procCropBlob.size, type: procCropBlob.type } : null);
-    const ocrResult = await Tesseract.recognize(procCropBlob, 'eng', tesseractOpts);
-    const setText = (ocrResult.data.text || '').toUpperCase();
-    const rawText = setText.trim();
-    const codes = extractSetCodes(setText);
-    console.log('[DEBUG] set-code OCR result:', rawText || '(none)');
-    console.log('[8/9] OCR set code result:', rawText || '(none)');
-    console.log('[8/9] Extracted set code candidates:', codes);
-
-    if (codes.length === 0) {
-      updateResult('No set code detected. Align the card so the bottom-right code is inside the box.');
-      logMessage(`No valid set code found. OCR text: ${rawText.replace(/\n/g, ' ')}`);
-      return;
-    }
-
-    setDebugUiStep(7, `Matching: ${bestMatch || '(none)'}`);
-    console.log('[9/9] Comparing detected set code with returned printings');
-    const bestMatch = await findBestSetCode(codes);
-    console.log('[DEBUG] best set-code candidate', bestMatch || '(none)');
-    if (!bestMatch) {
-      updateResult('No valid set code match found. Try a clearer scan.');
-      logMessage(`OCR text found but no database match: ${rawText.replace(/\n/g, ' ')}`);
-      setScanIndicatorSuccess(false);
-      return;
-    }
-
-    const edition = detectEdition(rawText);
-    logMessage('Set code found and validated against database. Fetching card info...');
-    setScanIndicatorSuccess(true);
-    showScanPreview(bestMatch);
-
-    const variants = generateSetCodeVariants(bestMatch);
-    let matchedEntry = null;
-    let bestNameOnly = null;
-
-    for (const card of nameResults) {
-      const cardName = card.name || '';
-      const nameCmp = compareNames(detectedName, cardName);
-      if (nameCmp.exact) {
-        bestNameOnly = { card, similarity: 1, exact: true };
-      } else if (nameCmp.fuzzy) {
-        if (!bestNameOnly || nameCmp.similarity > bestNameOnly.similarity) {
-          bestNameOnly = { card, similarity: nameCmp.similarity, exact: false };
-        }
-      }
-
-      if (!nameCmp.exact && !nameCmp.fuzzy) continue;
-
-      const sets = card.card_sets || [];
-      for (const s of sets) {
-        const apiCode = (s.set_code || '').toUpperCase();
-        for (const v of variants) {
-          if (apiCode === v.toUpperCase()) {
-            matchedEntry = { card, matched: s, nameCmp };
-            break;
-          }
-        }
-        if (matchedEntry) break;
-      }
-      if (matchedEntry) break;
-    }
-
-    let cardInfo = null;
-    if (matchedEntry) {
-      const card = matchedEntry.card;
-      const matched = matchedEntry.matched || {};
-      cardInfo = { name: card.name || 'Unknown', setName: matched.set_name || '', rarity: matched.set_rarity || '', image: (card.card_images && card.card_images[0] && card.card_images[0].image_url) || '', matchType: 'name+set', confidence: 'high' };
-      console.log('Matched card by name + set code');
-      logMessage('Lookup path: name + set (high confidence)');
-    } else if (bestNameOnly) {
-      const card = bestNameOnly.card;
-      const matched = (card.card_sets && card.card_sets[0]) || null;
-      cardInfo = { name: card.name || 'Unknown', setName: matched ? matched.set_name : '', rarity: matched ? matched.set_rarity : '', image: (card.card_images && card.card_images[0] && card.card_images[0].image_url) || '', matchType: 'name-only', confidence: 'medium' };
-      console.log('Matched card by name only');
-      logMessage('Lookup path: name-only (medium confidence)');
-    } else {
-      cardInfo = await fetchCardInfo(bestMatch, detectedName);
-    }
-
-    console.log('[DEBUG] final database match', {
-      bestMatch,
-      cardInfo,
-      detectedName,
-      rawSetCodeText: rawText,
-      matchedPrinting: matchedEntry ? {
-        name: matchedEntry.card && matchedEntry.card.name,
-        setCode: matchedEntry.matched && matchedEntry.matched.set_code,
-        setName: matchedEntry.matched && matchedEntry.matched.set_name,
-        rarity: matchedEntry.matched && matchedEntry.matched.set_rarity
-      } : null
-    });
-    updateResult(`Detected ${bestMatch} — ${cardInfo.name || 'Unknown'} (${cardInfo.setName || edition})`);
-    addEntry(bestMatch, cardInfo.name || 'Unknown', rawText, edition, cardInfo.setName, cardInfo.rarity, cardInfo.image, cardInfo.confidence || 'low');
-    setDebugUiStep(8, `Saved: ${bestMatch || '(none)'}`);
-    console.log('=== RECOGNITION PIPELINE COMPLETE ===');
+    updateResult(`${matchedSetCode} — ${cardInfo.name || 'Unknown'} (${cardInfo.setName || edition})`);
+    addEntry(matchedSetCode, cardInfo.name, rawSetText, edition, cardInfo.setName, cardInfo.rarity, cardInfo.image, 'high');
+    showScanPreview(matchedSetCode);
+    logMessage('Saved.');
   } catch (error) {
     console.error(error);
     updateResult('OCR failed. Use a clear, well-lit photo of the card.');
-    logMessage('An error occurred during text recognition.');
+    logMessage('OCR failed.');
   }
 }
 
@@ -1068,16 +568,15 @@ async function openCamera() {
 
   try {
     stream = await navigator.mediaDevices.getUserMedia({
-      video: {
-        facingMode: 'environment'
-      },
+      video: { facingMode: 'environment' },
       audio: false
     });
-    video.srcObject = stream;
-    await video.play();
+    if (video) {
+      video.srcObject = stream;
+      await video.play();
+    }
     enterFullscreenMode();
-    resetScanIndicator();
-    requestAnimationFrame(() => updateOcrCropOverlay());
+    hideScanPreview();
     logMessage('Camera open. Place the card inside the frame and tap Scan.');
   } catch (error) {
     console.error(error);
@@ -1092,32 +591,23 @@ async function scanCard() {
     return;
   }
 
-  console.log('scanCard: button pressed');
-  clearDebugUi();
-  setDebugUiStep(1, 'Image captured');
-
   canvas.width = video.videoWidth;
   canvas.height = video.videoHeight;
   const context = canvas.getContext('2d');
   context.drawImage(video, 0, 0, canvas.width, canvas.height);
-  console.log('[DEBUG] captured image resolution', { width: canvas.width, height: canvas.height });
-  console.log('scanCard: image drawn to canvas');
 
   return new Promise((resolve, reject) => {
     canvas.toBlob(async blob => {
-      if (blob) {
-        console.log('scanCard: image captured (blob)');
-        try {
-          await recognizeImage(blob);
-          resolve();
-        } catch (e) {
-          alert(e.message || 'Unknown error');
-          console.error('scanCard: recognizeImage error', e);
-          reject(e);
-        }
-      } else {
-        console.error('scanCard: unable to capture image blob');
+      if (!blob) {
         reject(new Error('Unable to capture image.'));
+        return;
+      }
+      try {
+        await recognizeImage(blob);
+        resolve();
+      } catch (error) {
+        console.error(error);
+        reject(error);
       }
     }, 'image/png');
   });
@@ -1134,14 +624,12 @@ function handleFileUpload(file) {
       const context = canvas.getContext('2d');
       context.drawImage(img, 0, 0);
       canvas.toBlob(async blob => {
-        if (blob) {
-          console.log('handleFileUpload: image uploaded (blob)');
-          try {
-            await recognizeImage(blob);
-          } catch (e) {
-            console.error('handleFileUpload: recognizeImage error', e);
-            updateResult('OCR failed on uploaded image.');
-          }
+        if (!blob) return;
+        try {
+          await recognizeImage(blob);
+        } catch (error) {
+          console.error(error);
+          updateResult('OCR failed on uploaded image.');
         }
       }, 'image/png');
     };
@@ -1155,18 +643,18 @@ function exportCsv() {
     logMessage('No saved entries to export.');
     return;
   }
+
   const grouped = entries.reduce((map, entry) => {
     const key = entry.setCode;
     if (!map[key]) {
       map[key] = {
         setCode: entry.setCode,
-        name: entry.name || entry.cardName || 'Unknown',
+        name: entry.name || 'Unknown',
         setName: entry.setName || '',
         rarity: entry.rarity || '',
         lastScannedAt: entry.scannedAt
       };
     }
-    // prefer longer/more informative values
     if (entry.name && entry.name.length > (map[key].name || '').length) map[key].name = entry.name;
     if (entry.setName && entry.setName.length > (map[key].setName || '').length) map[key].setName = entry.setName;
     if (entry.rarity && entry.rarity.length > (map[key].rarity || '').length) map[key].rarity = entry.rarity;
@@ -1199,7 +687,7 @@ function exportCsv() {
   link.click();
   document.body.removeChild(link);
   URL.revokeObjectURL(url);
-  logMessage('CSV downloaded. Open it in Excel or Numbers.');
+  logMessage('CSV downloaded.');
 }
 
 function clearSheet() {
@@ -1211,23 +699,27 @@ function clearSheet() {
   logMessage('All entries removed.');
 }
 
-window.addEventListener('resize', () => updateOcrCropOverlay());
-window.addEventListener('orientationchange', () => setTimeout(updateOcrCropOverlay, 150));
-video.addEventListener('loadedmetadata', () => updateOcrCropOverlay());
-video.addEventListener('playing', () => updateOcrCropOverlay());
-openCameraBtn.addEventListener('click', openCamera);
+window.addEventListener('resize', () => hideScanPreview());
+window.addEventListener('orientationchange', () => setTimeout(hideScanPreview, 150));
+if (video) {
+  video.addEventListener('loadedmetadata', () => hideScanPreview());
+  video.addEventListener('playing', () => hideScanPreview());
+}
+if (openCameraBtn) openCameraBtn.addEventListener('click', openCamera);
 if (scanListBtn) scanListBtn.addEventListener('click', showEntriesPanel);
-captureBtn.addEventListener('click', scanCard);
+if (captureBtn) captureBtn.addEventListener('click', scanCard);
 if (scanBtn) scanBtn.addEventListener('click', scanCard);
 if (closeCameraBtn) closeCameraBtn.addEventListener('click', closeCamera);
-uploadBtn.addEventListener('click', () => fileInput.click());
-fileInput.addEventListener('change', () => {
-  if (fileInput.files && fileInput.files[0]) {
-    handleFileUpload(fileInput.files[0]);
-  }
-});
-exportBtn.addEventListener('click', exportCsv);
-clearBtn.addEventListener('click', clearSheet);
+if (uploadBtn) uploadBtn.addEventListener('click', () => fileInput.click());
+if (fileInput) {
+  fileInput.addEventListener('change', () => {
+    if (fileInput.files && fileInput.files[0]) {
+      handleFileUpload(fileInput.files[0]);
+    }
+  });
+}
+if (exportBtn) exportBtn.addEventListener('click', exportCsv);
+if (clearBtn) clearBtn.addEventListener('click', clearSheet);
 if (scanListBack) scanListBack.addEventListener('click', showHomeScreen);
 
 sortEntries();
