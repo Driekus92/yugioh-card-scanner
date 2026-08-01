@@ -360,6 +360,47 @@ video {
   color: #fecaca;
 }
 
+.debug-info {
+  margin-top: 10px;
+  padding: 10px 12px;
+  border-radius: 12px;
+  background: rgba(255, 255, 255, 0.05);
+  border: 1px solid rgba(255, 255, 255, 0.08);
+}
+
+.debug-info-title {
+  font-size: 0.8rem;
+  font-weight: 700;
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+  color: #7dd3fc;
+  margin-bottom: 8px;
+}
+
+.debug-info-body {
+  display: grid;
+  gap: 6px;
+  font-size: 0.9rem;
+  color: #e2e8f0;
+}
+
+.debug-info-row {
+  display: flex;
+  justify-content: space-between;
+  gap: 10px;
+  align-items: flex-start;
+}
+
+.debug-info-label {
+  color: #94a3b8;
+  flex-shrink: 0;
+}
+
+.debug-info-value {
+  text-align: right;
+  word-break: break-word;
+}
+
 .entries-header {
   display: flex;
   align-items: center;

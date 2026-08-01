@@ -22,10 +22,19 @@ const guideWindow = document.querySelector('.guide-window');
 const scanStageBadge = document.getElementById('scanStageBadge');
 const scanTopFeedback = document.getElementById('scanTopFeedback');
 const scanTopFeedbackText = document.getElementById('scanTopFeedbackText');
+const debugInfoBody = document.getElementById('debugInfoBody');
 
 let stream = null;
 let entries = JSON.parse(localStorage.getItem('ygoscanner_entries') || '[]');
 let feedbackTimer = null;
+let debugState = {
+  imageDimensions: '—',
+  ocrStarted: 'Not started',
+  cardName: '—',
+  setCode: '—',
+  apiCards: '—',
+  match: '—'
+};
 
 const OCR_NAME_PROFILE = {
   scale: 2,
@@ -86,6 +95,41 @@ function updateResult(text) {
   if (scanResult) {
     scanResult.textContent = text;
   }
+}
+
+function renderDebugInfo() {
+  if (!debugInfoBody) return;
+  const rows = [
+    ['Image', debugState.imageDimensions],
+    ['OCR started', debugState.ocrStarted],
+    ['Card name OCR', debugState.cardName],
+    ['Set code OCR', debugState.setCode],
+    ['API cards', debugState.apiCards],
+    ['Match', debugState.match]
+  ];
+  debugInfoBody.innerHTML = rows.map(([label, value]) => `
+    <div class="debug-info-row">
+      <span class="debug-info-label">${label}</span>
+      <span class="debug-info-value">${value}</span>
+    </div>
+  `).join('');
+}
+
+function updateDebugInfo(patch) {
+  debugState = { ...debugState, ...patch };
+  renderDebugInfo();
+}
+
+function resetDebugInfo() {
+  debugState = {
+    imageDimensions: '—',
+    ocrStarted: 'Not started',
+    cardName: '—',
+    setCode: '—',
+    apiCards: '—',
+    match: '—'
+  };
+  renderDebugInfo();
 }
 
 function compareSetCodes(codeA, codeB) {
@@ -527,23 +571,30 @@ async function closeCamera() {
 
 async function recognizeImage(blob) {
   resetScanFeedback();
+  resetDebugInfo();
   setScanStage('Capturing image', 'info');
   updateResult('Scanning card...');
 
   try {
     const image = await loadImage(blob);
+    updateDebugInfo({ imageDimensions: `${image.width} × ${image.height}` });
     setScanStage('OCR running', 'info');
+    updateDebugInfo({ ocrStarted: 'Started', match: 'Running name OCR...' });
     const detectedName = await readCardName(image);
     if (!detectedName) {
+      updateDebugInfo({ cardName: 'No text detected', match: 'No card name detected' });
       updateResult('No card name detected. Try a clearer photo.');
       setScanStage('Scan failed', 'error');
       showScanFeedback('✕ Scan failed', 'error');
       return;
     }
 
+    updateDebugInfo({ cardName: detectedName });
     setScanStage('Searching database', 'info');
     const cards = await fetchCardsByName(detectedName);
+    updateDebugInfo({ apiCards: String(cards.length) });
     if (!cards.length) {
+      updateDebugInfo({ match: 'No API cards returned for the name' });
       updateResult('No matching card found by name.');
       setScanStage('Scan failed', 'error');
       showScanFeedback('✕ Scan failed', 'error');
@@ -552,7 +603,9 @@ async function recognizeImage(blob) {
 
     setScanStage('Reading set code', 'info');
     const { text: rawSetText, codes } = await readSetCode(image);
+    updateDebugInfo({ setCode: codes.length ? codes.join(', ') : 'No set code detected' });
     if (!codes.length) {
+      updateDebugInfo({ match: 'No set code detected' });
       updateResult('No set code detected. Align the code inside the guide.');
       setScanStage('Scan failed', 'error');
       showScanFeedback('✕ Scan failed', 'error');
@@ -578,6 +631,7 @@ async function recognizeImage(blob) {
     }
 
     if (!bestMatch) {
+      updateDebugInfo({ match: 'No local match for the detected set code' });
       updateResult('No matching set code found locally.');
       setScanStage('Scan failed', 'error');
       showScanFeedback('✕ Scan failed', 'error');
@@ -595,6 +649,7 @@ async function recognizeImage(blob) {
       image: (card.card_images && card.card_images[0] && card.card_images[0].image_url) || ''
     };
 
+    updateDebugInfo({ match: `${matchedSetCode} — ${cardInfo.name || 'Unknown'}` });
     updateResult(`${matchedSetCode} — ${cardInfo.name || 'Unknown'} (${cardInfo.setName || edition})`);
     addEntry(matchedSetCode, cardInfo.name, rawSetText, edition, cardInfo.setName, cardInfo.rarity, cardInfo.image, 'high');
     showScanPreview(matchedSetCode);
@@ -602,6 +657,7 @@ async function recognizeImage(blob) {
     showScanFeedback('✓ Card saved', 'success');
   } catch (error) {
     console.error(error);
+    updateDebugInfo({ match: 'OCR failed before a match could be determined' });
     updateResult('OCR failed. Use a clear, well-lit photo of the card.');
     setScanStage('Scan failed', 'error');
     showScanFeedback('✕ Scan failed', 'error');
@@ -811,6 +867,7 @@ if (scanListBack) scanListBack.addEventListener('click', showHomeScreen);
 
 sortEntries();
 renderEntries();
+resetDebugInfo();
 setScanStage('Camera ready', 'info');
 
 if ('serviceWorker' in navigator) {
