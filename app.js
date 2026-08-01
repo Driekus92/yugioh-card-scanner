@@ -559,10 +559,13 @@ async function recognizeImage(blob) {
 }
 
 async function openCamera() {
+  showScannerScreen();
   const secure = window.isSecureContext || location.protocol === 'http:' && location.hostname === 'localhost';
   if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia || !secure) {
     logMessage('Camera unavailable here. Opening the upload picker instead.');
-    fileInput.click();
+    if (fileInput) {
+      fileInput.click();
+    }
     return;
   }
 
@@ -581,36 +584,64 @@ async function openCamera() {
   } catch (error) {
     console.error(error);
     logMessage('Unable to open the camera. Opening the upload picker instead.');
-    fileInput.click();
+    if (fileInput) {
+      fileInput.click();
+    }
   }
 }
 
 async function scanCard() {
-  if (!stream) {
-    logMessage('Open the camera first or upload an image.');
-    return;
+  const canCaptureVideo = !!(video && video.readyState >= 2 && video.videoWidth && video.videoHeight);
+  if (stream || canCaptureVideo) {
+    canvas.width = video.videoWidth || video.clientWidth;
+    canvas.height = video.videoHeight || video.clientHeight;
+    const context = canvas.getContext('2d');
+    context.drawImage(video, 0, 0, canvas.width, canvas.height);
+
+    return new Promise((resolve, reject) => {
+      canvas.toBlob(async blob => {
+        if (!blob) {
+          reject(new Error('Unable to capture image.'));
+          return;
+        }
+        try {
+          await recognizeImage(blob);
+          resolve();
+        } catch (error) {
+          console.error(error);
+          reject(error);
+        }
+      }, 'image/png');
+    });
   }
 
-  canvas.width = video.videoWidth;
-  canvas.height = video.videoHeight;
-  const context = canvas.getContext('2d');
-  context.drawImage(video, 0, 0, canvas.width, canvas.height);
+  if (canvas.width && canvas.height) {
+    logMessage('Scanning the last captured image...');
+    return new Promise((resolve, reject) => {
+      canvas.toBlob(async blob => {
+        if (!blob) {
+          reject(new Error('Unable to scan the existing image.'));
+          return;
+        }
+        try {
+          await recognizeImage(blob);
+          resolve();
+        } catch (error) {
+          console.error(error);
+          reject(error);
+        }
+      }, 'image/png');
+    });
+  }
 
-  return new Promise((resolve, reject) => {
-    canvas.toBlob(async blob => {
-      if (!blob) {
-        reject(new Error('Unable to capture image.'));
-        return;
-      }
-      try {
-        await recognizeImage(blob);
-        resolve();
-      } catch (error) {
-        console.error(error);
-        reject(error);
-      }
-    }, 'image/png');
-  });
+  if (fileInput) {
+    logMessage('No camera image available. Choose an image to scan.');
+    fileInput.click();
+    return null;
+  }
+
+  logMessage('Open the camera first or upload an image.');
+  return null;
 }
 
 function handleFileUpload(file) {
