@@ -24,6 +24,8 @@ const scanTopFeedback = document.getElementById('scanTopFeedback');
 const scanTopFeedbackText = document.getElementById('scanTopFeedbackText');
 const cameraStatusOverlay = document.getElementById('cameraStatusOverlay');
 const cameraStatusText = document.getElementById('cameraStatusText');
+const cameraDebugOverlay = document.getElementById('cameraDebugOverlay');
+const cameraDebugBody = document.getElementById('cameraDebugBody');
 const debugInfoBody = document.getElementById('debugInfoBody');
 
 let stream = null;
@@ -35,6 +37,10 @@ let debugState = {
   cardName: '—',
   setCode: '—',
   apiCards: '—',
+  apiQuery: '—',
+  apiStatus: '—',
+  apiError: '—',
+  apiOutcome: '—',
   match: '—'
 };
 
@@ -106,22 +112,39 @@ function updateResult(text) {
   }
 }
 
-function renderDebugInfo() {
-  if (!debugInfoBody) return;
-  const rows = [
+function getDebugRows() {
+  return [
     ['Image', debugState.imageDimensions],
     ['OCR started', debugState.ocrStarted],
-    ['Card name OCR', debugState.cardName],
+    ['OCR card name', debugState.cardName],
     ['Set code OCR', debugState.setCode],
-    ['API cards', debugState.apiCards],
+    ['API query', debugState.apiQuery],
+    ['API status', debugState.apiStatus],
+    ['Cards returned', debugState.apiCards],
+    ['API error', debugState.apiError],
+    ['Lookup outcome', debugState.apiOutcome],
     ['Match', debugState.match]
   ];
-  debugInfoBody.innerHTML = rows.map(([label, value]) => `
-    <div class="debug-info-row">
-      <span class="debug-info-label">${label}</span>
-      <span class="debug-info-value">${value}</span>
-    </div>
-  `).join('');
+}
+
+function renderDebugInfo() {
+  const rows = getDebugRows();
+  if (debugInfoBody) {
+    debugInfoBody.innerHTML = rows.map(([label, value]) => `
+      <div class="debug-info-row">
+        <span class="debug-info-label">${label}</span>
+        <span class="debug-info-value">${value}</span>
+      </div>
+    `).join('');
+  }
+  if (cameraDebugBody) {
+    cameraDebugBody.innerHTML = rows.map(([label, value]) => `
+      <div class="camera-debug-row">
+        <span class="camera-debug-label">${label}</span>
+        <span class="camera-debug-value">${value}</span>
+      </div>
+    `).join('');
+  }
 }
 
 function updateDebugInfo(patch) {
@@ -136,6 +159,10 @@ function resetDebugInfo() {
     cardName: '—',
     setCode: '—',
     apiCards: '—',
+    apiQuery: '—',
+    apiStatus: '—',
+    apiError: '—',
+    apiOutcome: '—',
     match: '—'
   };
   renderDebugInfo();
@@ -468,15 +495,30 @@ async function readSetCode(image) {
 }
 
 async function fetchCardsByName(name) {
-  if (!name) return [];
+  if (!name) {
+    updateDebugInfo({ apiQuery: 'No OCR name provided', apiStatus: 'Skipped', apiCards: '0', apiError: '—', apiOutcome: 'Skipped (empty name)' });
+    return [];
+  }
+
   const endpoint = `https://db.ygoprodeck.com/api/v7/cardinfo.php?name=${encodeURIComponent(name)}`;
+  updateDebugInfo({ apiQuery: endpoint, apiStatus: 'Requesting', apiCards: '0', apiError: '—', apiOutcome: 'Calling API...' });
+
   try {
     const response = await fetch(endpoint);
-    if (!response.ok) return [];
+    updateDebugInfo({ apiStatus: String(response.status), apiOutcome: response.ok ? 'Succeeded' : 'Failed' });
+    if (!response.ok) {
+      updateDebugInfo({ apiError: `HTTP ${response.status}`, apiCards: '0' });
+      return [];
+    }
+
     const json = await response.json();
-    return Array.isArray(json && json.data) ? json.data : [];
+    const cards = Array.isArray(json && json.data) ? json.data : [];
+    updateDebugInfo({ apiCards: String(cards.length), apiError: '—', apiOutcome: cards.length ? 'Returned cards' : 'No cards returned' });
+    return cards;
   } catch (error) {
+    const message = error && error.message ? error.message : 'Unknown fetch error';
     console.warn('Card lookup failed', error);
+    updateDebugInfo({ apiStatus: 'Error', apiError: message, apiCards: '0', apiOutcome: 'Failed' });
     return [];
   }
 }
