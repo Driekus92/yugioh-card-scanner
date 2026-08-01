@@ -18,10 +18,14 @@ const scannerScreen = document.querySelector('.scanner-screen');
 const entriesPanel = document.querySelector('.entries-panel');
 const entriesTableBody = document.querySelector('#entriesTable tbody');
 const scanListBack = document.getElementById('scanListBack');
+const guideWindow = document.querySelector('.guide-window');
+const scanStageBadge = document.getElementById('scanStageBadge');
+const scanTopFeedback = document.getElementById('scanTopFeedback');
+const scanTopFeedbackText = document.getElementById('scanTopFeedbackText');
 
 let stream = null;
 let entries = JSON.parse(localStorage.getItem('ygoscanner_entries') || '[]');
-const DEBUG_UI = false;
+let feedbackTimer = null;
 
 const OCR_NAME_PROFILE = {
   scale: 2,
@@ -39,6 +43,43 @@ function logMessage(message) {
   if (status) {
     status.textContent = message;
   }
+}
+
+function setScanStage(message, tone = 'info') {
+  if (scanStageBadge) {
+    scanStageBadge.textContent = message;
+    scanStageBadge.className = `scan-stage-badge ${tone}`;
+  }
+  if (status) {
+    status.textContent = message;
+  }
+}
+
+function resetScanFeedback() {
+  if (scanTopFeedback) {
+    scanTopFeedback.classList.remove('show', 'success', 'error');
+  }
+  if (scanTopFeedbackText) {
+    scanTopFeedbackText.textContent = '';
+  }
+  if (guideWindow) {
+    guideWindow.classList.remove('success', 'error');
+  }
+}
+
+function showScanFeedback(message, tone = 'success') {
+  if (!scanTopFeedback || !scanTopFeedbackText) return;
+  scanTopFeedbackText.textContent = message;
+  scanTopFeedback.classList.remove('success', 'error');
+  scanTopFeedback.classList.add('show', tone);
+  if (guideWindow) {
+    guideWindow.classList.remove('success', 'error');
+    guideWindow.classList.add(tone);
+  }
+  clearTimeout(feedbackTimer);
+  feedbackTimer = setTimeout(() => {
+    resetScanFeedback();
+  }, 2200);
 }
 
 function updateResult(text) {
@@ -479,40 +520,46 @@ async function closeCamera() {
   exitFullscreenMode();
   showHomeScreen();
   hideScanPreview();
+  resetScanFeedback();
+  setScanStage('Camera closed', 'info');
   logMessage('Camera closed.');
 }
 
 async function recognizeImage(blob) {
-  logMessage('Capturing...');
+  resetScanFeedback();
+  setScanStage('Capturing image', 'info');
   updateResult('Scanning card...');
 
   try {
     const image = await loadImage(blob);
-    logMessage('Reading card name...');
+    setScanStage('OCR running', 'info');
     const detectedName = await readCardName(image);
     if (!detectedName) {
       updateResult('No card name detected. Try a clearer photo.');
-      logMessage('No card name detected.');
+      setScanStage('Scan failed', 'error');
+      showScanFeedback('✕ Scan failed', 'error');
       return;
     }
 
-    logMessage('Searching database...');
+    setScanStage('Searching database', 'info');
     const cards = await fetchCardsByName(detectedName);
     if (!cards.length) {
       updateResult('No matching card found by name.');
-      logMessage('No matching card found.');
+      setScanStage('Scan failed', 'error');
+      showScanFeedback('✕ Scan failed', 'error');
       return;
     }
 
-    logMessage('Reading set code...');
+    setScanStage('Reading set code', 'info');
     const { text: rawSetText, codes } = await readSetCode(image);
     if (!codes.length) {
       updateResult('No set code detected. Align the code inside the guide.');
-      logMessage('No set code detected.');
+      setScanStage('Scan failed', 'error');
+      showScanFeedback('✕ Scan failed', 'error');
       return;
     }
 
-    logMessage('Matching...');
+    setScanStage('Matching', 'info');
     let bestMatch = null;
     for (const card of cards) {
       const nameComparison = compareNames(detectedName, card.name || '');
@@ -532,7 +579,8 @@ async function recognizeImage(blob) {
 
     if (!bestMatch) {
       updateResult('No matching set code found locally.');
-      logMessage('No matching set code found.');
+      setScanStage('Scan failed', 'error');
+      showScanFeedback('✕ Scan failed', 'error');
       return;
     }
 
@@ -550,11 +598,13 @@ async function recognizeImage(blob) {
     updateResult(`${matchedSetCode} — ${cardInfo.name || 'Unknown'} (${cardInfo.setName || edition})`);
     addEntry(matchedSetCode, cardInfo.name, rawSetText, edition, cardInfo.setName, cardInfo.rarity, cardInfo.image, 'high');
     showScanPreview(matchedSetCode);
-    logMessage('Saved.');
+    setScanStage('Card saved', 'success');
+    showScanFeedback('✓ Card saved', 'success');
   } catch (error) {
     console.error(error);
     updateResult('OCR failed. Use a clear, well-lit photo of the card.');
-    logMessage('OCR failed.');
+    setScanStage('Scan failed', 'error');
+    showScanFeedback('✕ Scan failed', 'error');
   }
 }
 
@@ -580,6 +630,8 @@ async function openCamera() {
     }
     enterFullscreenMode();
     hideScanPreview();
+    resetScanFeedback();
+    setScanStage('Camera ready', 'info');
     logMessage('Camera open. Place the card inside the frame and tap Scan.');
   } catch (error) {
     console.error(error);
@@ -591,6 +643,8 @@ async function openCamera() {
 }
 
 async function scanCard() {
+  resetScanFeedback();
+  setScanStage('Capturing image', 'info');
   const canCaptureVideo = !!(video && video.readyState >= 2 && video.videoWidth && video.videoHeight);
   if (stream || canCaptureVideo) {
     canvas.width = video.videoWidth || video.clientWidth;
@@ -646,6 +700,8 @@ async function scanCard() {
 
 function handleFileUpload(file) {
   if (!file) return;
+  resetScanFeedback();
+  setScanStage('Capturing image', 'info');
   const reader = new FileReader();
   reader.onload = async () => {
     const img = new Image();
@@ -755,6 +811,7 @@ if (scanListBack) scanListBack.addEventListener('click', showHomeScreen);
 
 sortEntries();
 renderEntries();
+setScanStage('Camera ready', 'info');
 
 if ('serviceWorker' in navigator) {
   window.addEventListener('load', async () => {

@@ -50,9 +50,10 @@
           <div class="video-frame">
             <video id="video" playsinline autoplay muted></video>
             <div class="camera-guide">
+            <div id="scanTopFeedback" class="scan-top-feedback" aria-live="polite">
+              <span id="scanTopFeedbackText" class="scan-top-feedback-text"></span>
+            </div>
             <div class="guide-window">
-              <div class="ocr-debug-rect"></div>
-              <div class="name-ocr-rect"></div>
             </div>
             <div id="scanPreview" class="scan-preview" aria-live="polite">
               <span id="scanPreviewCode" class="scan-preview-text"></span>
@@ -68,6 +69,7 @@
 
         <div class="status-card">
           <h2>Scan Result</h2>
+          <div id="scanStageBadge" class="scan-stage-badge info">Camera ready</div>
           <div id="scanResult" class="result">No scan yet.</div>
           <div id="status" class="status">Ready.</div>
         </div>
