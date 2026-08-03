@@ -145,7 +145,7 @@ video {
   max-height: 420px;
   border-radius: 20px;
   background: #03070d;
-  object-fit: cover;
+  object-fit: contain;
 }
 
 .fullscreen-camera .preview,

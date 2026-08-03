@@ -39,6 +39,10 @@ let debugState = {
   setCode: '—',
   ocrInputSize: '—',
   ocrCrop: '—',
+  ocrCropX: '—',
+  ocrCropY: '—',
+  ocrCropWidth: '—',
+  ocrCropHeight: '—',
   apiCards: '—',
   apiQuery: '—',
   apiStatus: '—',
@@ -48,10 +52,12 @@ let debugState = {
 };
 
 const OCR_NAME_PROFILE = {
-  scale: 3,
-  contrast: 0.8,
-  threshold: 0.58,
+  scale: 5,
+  contrast: 0.9,
+  threshold: 0.64,
   sharpen: true,
+  adaptiveThreshold: false,
+  denoise: true,
   whitelist: "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789 '’-:,.()"
 };
 
@@ -124,6 +130,10 @@ function getDebugRows() {
     ['OCR card name', debugState.cardName],
     ['OCR input size', debugState.ocrInputSize],
     ['OCR crop', debugState.ocrCrop],
+    ['Crop x', debugState.ocrCropX],
+    ['Crop y', debugState.ocrCropY],
+    ['Crop width', debugState.ocrCropWidth],
+    ['Crop height', debugState.ocrCropHeight],
     ['Set code OCR', debugState.setCode],
     ['API query', debugState.apiQuery],
     ['API status', debugState.apiStatus],
@@ -167,6 +177,10 @@ function resetDebugInfo() {
     setCode: '—',
     ocrInputSize: '—',
     ocrCrop: '—',
+    ocrCropX: '—',
+    ocrCropY: '—',
+    ocrCropWidth: '—',
+    ocrCropHeight: '—',
     apiCards: '—',
     apiQuery: '—',
     apiStatus: '—',
@@ -453,6 +467,37 @@ function sharpenImageData(imageData) {
   }
 }
 
+function denoiseImageData(imageData) {
+  const width = imageData.width;
+  const height = imageData.height;
+  const data = imageData.data;
+  const output = new Uint8ClampedArray(data.length);
+
+  for (let y = 0; y < height; y += 1) {
+    for (let x = 0; x < width; x += 1) {
+      const index = (y * width + x) * 4;
+      let sum = 0;
+      let count = 0;
+      for (let yy = Math.max(0, y - 1); yy <= Math.min(height - 1, y + 1); yy += 1) {
+        for (let xx = Math.max(0, x - 1); xx <= Math.min(width - 1, x + 1); xx += 1) {
+          const sourceIndex = (yy * width + xx) * 4;
+          sum += data[sourceIndex];
+          count += 1;
+        }
+      }
+      const average = Math.round(sum / count);
+      output[index] = average;
+      output[index + 1] = average;
+      output[index + 2] = average;
+      output[index + 3] = data[index + 3];
+    }
+  }
+
+  for (let index = 0; index < data.length; index += 1) {
+    data[index] = output[index];
+  }
+}
+
 function preprocessCanvas(canvas, profile) {
   const width = Math.round(canvas.width * (profile.scale || 1));
   const height = Math.round(canvas.height * (profile.scale || 1));
@@ -463,10 +508,30 @@ function preprocessCanvas(canvas, profile) {
   const imageData = ctx.getImageData(0, 0, width, height);
   const data = imageData.data;
   const gain = 1 + (profile.contrast || 0);
-  const threshold = (profile.threshold ?? 0.5) * 255;
+  const baseThreshold = (profile.threshold ?? 0.5) * 255;
+
+  if (profile.denoise) {
+    denoiseImageData(imageData);
+  }
+
   for (let index = 0; index < data.length; index += 4) {
     const gray = Math.round(data[index] * 0.299 + data[index + 1] * 0.587 + data[index + 2] * 0.114);
     const adjusted = clamp(128 + (gray - 128) * gain, 0, 255);
+    let threshold = baseThreshold;
+    if (profile.adaptiveThreshold) {
+      const x = (index / 4) % width;
+      const y = Math.floor((index / 4) / width);
+      let sum = 0;
+      let count = 0;
+      for (let yy = Math.max(0, y - 1); yy <= Math.min(height - 1, y + 1); yy += 1) {
+        for (let xx = Math.max(0, x - 1); xx <= Math.min(width - 1, x + 1); xx += 1) {
+          const neighborIndex = (yy * width + xx) * 4;
+          sum += data[neighborIndex];
+          count += 1;
+        }
+      }
+      threshold = Math.max(baseThreshold, Math.round(sum / count));
+    }
     const binary = adjusted > threshold ? 255 : 0;
     data[index] = binary;
     data[index + 1] = binary;
@@ -518,6 +583,81 @@ function getCaptureRegions(image) {
   };
 }
 
+function getVideoRenderRect(videoElement) {
+  if (!videoElement) return null;
+  const rect = videoElement.getBoundingClientRect();
+  const elementWidth = rect.width || 1;
+  const elementHeight = rect.height || 1;
+  const naturalWidth = videoElement.videoWidth || elementWidth;
+  const naturalHeight = videoElement.videoHeight || elementHeight;
+
+  if (!naturalWidth || !naturalHeight) {
+    return null;
+  }
+
+  const scale = Math.max(elementWidth / naturalWidth, elementHeight / naturalHeight);
+  const renderedWidth = naturalWidth * scale;
+  const renderedHeight = naturalHeight * scale;
+  return {
+    x: (elementWidth - renderedWidth) / 2,
+    y: (elementHeight - renderedHeight) / 2,
+    width: renderedWidth,
+    height: renderedHeight,
+    scale
+  };
+}
+
+function getGuideCropRegion(image) {
+  const guide = guideWindow;
+  const previewVideo = video;
+  if (!guide || !previewVideo) {
+    return null;
+  }
+
+  const renderRect = getVideoRenderRect(previewVideo);
+  if (!renderRect) {
+    return null;
+  }
+
+  const videoRect = previewVideo.getBoundingClientRect();
+  const guideRect = guide.getBoundingClientRect();
+  const localX = guideRect.left - videoRect.left;
+  const localY = guideRect.top - videoRect.top;
+  const localWidth = guideRect.width;
+  const localHeight = guideRect.height;
+
+  const sourceX = clamp((localX - renderRect.x) / renderRect.scale, 0, image.width - 1);
+  const sourceY = clamp((localY - renderRect.y) / renderRect.scale, 0, image.height - 1);
+  const sourceWidth = clamp(localWidth / renderRect.scale, 0, image.width - sourceX);
+  const sourceHeight = clamp(localHeight / renderRect.scale, 0, image.height - sourceY);
+
+  if (!sourceWidth || !sourceHeight) {
+    return null;
+  }
+
+  return {
+    x: Math.round(sourceX),
+    y: Math.round(sourceY),
+    width: Math.round(sourceWidth),
+    height: Math.round(sourceHeight)
+  };
+}
+
+function getNameCropRegion(image) {
+  const width = image.width;
+  const height = image.height;
+  const x = Math.round(width * 0.14);
+  const y = Math.round(height * 0.035);
+  const cropWidth = Math.round(width * 0.72);
+  const cropHeight = Math.round(height * 0.1);
+  return {
+    x: clamp(x, 0, width - 1),
+    y: clamp(y, 0, height - 1),
+    width: clamp(cropWidth, 24, width - x),
+    height: clamp(cropHeight, 24, height - y)
+  };
+}
+
 function cropRegion(image, region) {
   const canvas = createCanvas(region.width, region.height);
   const ctx = canvas.getContext('2d');
@@ -526,20 +666,24 @@ function cropRegion(image, region) {
 }
 
 async function readCardName(image) {
-  const regions = getCaptureRegions(image);
-  const region = regions.name;
+  const region = getNameCropRegion(image);
   const cropped = cropRegion(image, region);
   const processed = preprocessCanvas(cropped, OCR_NAME_PROFILE);
   updateDebugInfo({
     ocrInputSize: `${processed.width} × ${processed.height}`,
-    ocrCrop: `${region.x}, ${region.y}, ${region.width}, ${region.height}`
+    ocrCrop: `${region.x}, ${region.y}, ${region.width}, ${region.height}`,
+    ocrCropX: region.x,
+    ocrCropY: region.y,
+    ocrCropWidth: region.width,
+    ocrCropHeight: region.height
   });
   if (ocrNamePreview) {
     ocrNamePreview.src = processed.toDataURL('image/png');
   }
   const result = await Tesseract.recognize(processed, 'eng', {
     tessedit_char_whitelist: OCR_NAME_PROFILE.whitelist,
-    tessedit_pageseg_mode: 7
+    tessedit_pageseg_mode: 7,
+    preserve_interword_spaces: 1
   });
   const text = (result.data.text || '').trim();
   return text.replace(/[\r\n]+/g, ' ').replace(/[^A-Za-z0-9\u00C0-\u024F'’\-:\,\.\(\) ]+/g, '').replace(/\s+/g, ' ').trim();
