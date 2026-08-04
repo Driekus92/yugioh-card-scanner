@@ -34,27 +34,39 @@ let entries = JSON.parse(localStorage.getItem('ygoscanner_entries') || '[]');
 let feedbackTimer = null;
 let debugState = {
   imageDimensions: '—',
+  capturedImageResolution: '—',
   ocrStarted: 'Not started',
   cardName: '—',
+  cardNameOcr: '—',
+  ocrRawText: '—',
+  ocrCleanedText: '—',
+  ocrNormalizedName: '—',
   setCode: '—',
+  setCodeOcr: '—',
   ocrInputSize: '—',
   ocrCrop: '—',
   ocrCropX: '—',
   ocrCropY: '—',
   ocrCropWidth: '—',
   ocrCropHeight: '—',
+  setCodeCrop: '—',
+  setCodeCropX: '—',
+  setCodeCropY: '—',
+  setCodeCropWidth: '—',
+  setCodeCropHeight: '—',
   apiCards: '—',
   apiQuery: '—',
   apiStatus: '—',
   apiError: '—',
   apiOutcome: '—',
-  match: '—'
+  match: '—',
+  matchReason: '—'
 };
 
 const OCR_NAME_PROFILE = {
-  scale: 5,
-  contrast: 0.9,
-  threshold: 0.64,
+  scale: 4,
+  contrast: 1.05,
+  threshold: 0.6,
   sharpen: true,
   adaptiveThreshold: false,
   denoise: true,
@@ -126,21 +138,33 @@ function updateResult(text) {
 function getDebugRows() {
   return [
     ['Image', debugState.imageDimensions],
+    ['Captured image', debugState.capturedImageResolution],
     ['OCR started', debugState.ocrStarted],
+    ['Raw OCR output', debugState.ocrRawText],
+    ['Cleaned OCR output', debugState.ocrCleanedText],
+    ['Normalized card name', debugState.ocrNormalizedName],
     ['OCR card name', debugState.cardName],
+    ['Card name OCR result', debugState.cardNameOcr],
     ['OCR input size', debugState.ocrInputSize],
-    ['OCR crop', debugState.ocrCrop],
-    ['Crop x', debugState.ocrCropX],
-    ['Crop y', debugState.ocrCropY],
-    ['Crop width', debugState.ocrCropWidth],
-    ['Crop height', debugState.ocrCropHeight],
+    ['Card name crop', debugState.ocrCrop],
+    ['Card name crop x', debugState.ocrCropX],
+    ['Card name crop y', debugState.ocrCropY],
+    ['Card name crop width', debugState.ocrCropWidth],
+    ['Card name crop height', debugState.ocrCropHeight],
+    ['Set code crop', debugState.setCodeCrop],
+    ['Set code crop x', debugState.setCodeCropX],
+    ['Set code crop y', debugState.setCodeCropY],
+    ['Set code crop width', debugState.setCodeCropWidth],
+    ['Set code crop height', debugState.setCodeCropHeight],
     ['Set code OCR', debugState.setCode],
-    ['API query', debugState.apiQuery],
+    ['Set code OCR result', debugState.setCodeOcr],
+    ['Final API query', debugState.apiQuery],
     ['API status', debugState.apiStatus],
     ['Cards returned', debugState.apiCards],
     ['API error', debugState.apiError],
     ['Lookup outcome', debugState.apiOutcome],
-    ['Match', debugState.match]
+    ['Match', debugState.match],
+    ['Match reason', debugState.matchReason]
   ];
 }
 
@@ -172,21 +196,33 @@ function updateDebugInfo(patch) {
 function resetDebugInfo() {
   debugState = {
     imageDimensions: '—',
+    capturedImageResolution: '—',
     ocrStarted: 'Not started',
     cardName: '—',
+    cardNameOcr: '—',
+    ocrRawText: '—',
+    ocrCleanedText: '—',
+    ocrNormalizedName: '—',
     setCode: '—',
+    setCodeOcr: '—',
     ocrInputSize: '—',
     ocrCrop: '—',
     ocrCropX: '—',
     ocrCropY: '—',
     ocrCropWidth: '—',
     ocrCropHeight: '—',
+    setCodeCrop: '—',
+    setCodeCropX: '—',
+    setCodeCropY: '—',
+    setCodeCropWidth: '—',
+    setCodeCropHeight: '—',
     apiCards: '—',
     apiQuery: '—',
     apiStatus: '—',
     apiError: '—',
     apiOutcome: '—',
-    match: '—'
+    match: '—',
+    matchReason: '—'
   };
   renderDebugInfo();
 }
@@ -386,6 +422,25 @@ function normalizeCardName(name) {
     return cleaned.replace(/\s+/g, ' ').trim().toLowerCase();
   } catch (error) {
     return name.replace(/[\-'\:.,]/g, ' ').replace(/[^A-Za-z0-9 ]+/g, '').replace(/\s+/g, ' ').trim().toLowerCase();
+  }
+}
+
+function cleanCardNameForApi(text) {
+  const cleaned = cleanOcrText(text);
+  if (!cleaned) return '';
+
+  try {
+    return cleaned
+      .normalize('NFD')
+      .replace(/\p{M}/gu, '')
+      .replace(/[^\p{L}\p{N}\s'’\-:.,()]/gu, ' ')
+      .replace(/\s+/g, ' ')
+      .trim();
+  } catch (error) {
+    return cleaned
+      .replace(/[^A-Za-z0-9\s'’\-:.,()]/g, ' ')
+      .replace(/\s+/g, ' ')
+      .trim();
   }
 }
 
@@ -646,10 +701,10 @@ function getGuideCropRegion(image) {
 function getNameCropRegion(image) {
   const width = image.width;
   const height = image.height;
-  const x = Math.round(width * 0.14);
-  const y = Math.round(height * 0.035);
-  const cropWidth = Math.round(width * 0.72);
-  const cropHeight = Math.round(height * 0.1);
+  const x = Math.round(width * 0.08);
+  const y = Math.round(height * 0.02);
+  const cropWidth = Math.round(width * 0.84);
+  const cropHeight = Math.round(height * 0.12);
   return {
     x: clamp(x, 0, width - 1),
     y: clamp(y, 0, height - 1),
@@ -663,6 +718,18 @@ function cropRegion(image, region) {
   const ctx = canvas.getContext('2d');
   ctx.drawImage(image, region.x, region.y, region.width, region.height, 0, 0, region.width, region.height);
   return canvas;
+}
+
+function cleanOcrText(text) {
+  return (text || '')
+    .replace(/\r\n?/g, '\n')
+    .replace(/\u00A0/g, ' ')
+    .split(/\n+/)
+    .map(part => part.trim())
+    .filter(Boolean)
+    .join(' ')
+    .replace(/\s+/g, ' ')
+    .trim();
 }
 
 async function readCardName(image) {
@@ -685,21 +752,49 @@ async function readCardName(image) {
     tessedit_pageseg_mode: 7,
     preserve_interword_spaces: 1
   });
-  const text = (result.data.text || '').trim();
-  return text.replace(/[\r\n]+/g, ' ').replace(/[^A-Za-z0-9\u00C0-\u024F'’\-:\,\.\(\) ]+/g, '').replace(/\s+/g, ' ').trim();
+  const rawText = (result.data.text || '').trim();
+  const cleanedText = cleanOcrText(rawText);
+  const lookupName = cleanCardNameForApi(cleanedText || rawText);
+  const normalizedName = normalizeCardName(cleanedText || rawText);
+
+  updateDebugInfo({
+    ocrRawText: rawText || '—',
+    ocrCleanedText: cleanedText || '—',
+    ocrNormalizedName: normalizedName || '—',
+    cardName: cleanedText || rawText || '—',
+    cardNameOcr: cleanedText || rawText || '—'
+  });
+
+  return {
+    rawText,
+    cleanedText,
+    lookupName: lookupName || cleanedText || rawText
+  };
 }
 
 async function readSetCode(image) {
   const regions = getCaptureRegions(image);
   const cropped = cropRegion(image, regions.setCode);
   const processed = preprocessCanvas(cropped, OCR_SET_CODE_PROFILE);
+  updateDebugInfo({
+    setCodeCrop: `${regions.setCode.x}, ${regions.setCode.y}, ${regions.setCode.width}, ${regions.setCode.height}`,
+    setCodeCropX: regions.setCode.x,
+    setCodeCropY: regions.setCode.y,
+    setCodeCropWidth: regions.setCode.width,
+    setCodeCropHeight: regions.setCode.height
+  });
   const result = await Tesseract.recognize(processed, 'eng', {
     tessedit_char_whitelist: OCR_SET_CODE_PROFILE.whitelist,
     tessedit_pageseg_mode: 7
   });
-  const text = (result.data.text || '').toUpperCase();
-  const codes = extractSetCodes(text);
-  return { text: text.trim(), codes };
+  const rawText = (result.data.text || '').toUpperCase();
+  const cleanedText = cleanOcrText(rawText);
+  const codes = extractSetCodes(cleanedText || rawText);
+  updateDebugInfo({
+    setCodeOcr: cleanedText || rawText || '—',
+    setCode: codes.length ? codes.join(', ') : 'No set code detected'
+  });
+  return { text: rawText.trim(), cleanedText, codes };
 }
 
 async function fetchCardsByName(name) {
@@ -708,8 +803,9 @@ async function fetchCardsByName(name) {
     return [];
   }
 
-  const endpoint = `https://db.ygoprodeck.com/api/v7/cardinfo.php?name=${encodeURIComponent(name)}`;
-  updateDebugInfo({ apiQuery: endpoint, apiStatus: 'Requesting', apiCards: '0', apiError: '—', apiOutcome: 'Calling API...' });
+  const query = new URLSearchParams({ name: String(name).trim() }).toString();
+  const endpoint = `https://db.ygoprodeck.com/api/v7/cardinfo.php?${query}`;
+  updateDebugInfo({ apiQuery: query, apiStatus: 'Requesting', apiCards: '0', apiError: '—', apiOutcome: 'Calling API...' });
 
   try {
     const response = await fetch(endpoint);
@@ -837,21 +933,34 @@ async function recognizeImage(blob) {
   try {
     const image = await loadImage(blob);
     updateDebugInfo({ imageDimensions: `${image.width} × ${image.height}` });
+    const previewCanvas = createCanvas(image.width, image.height);
+    const previewCtx = previewCanvas.getContext('2d');
+    previewCtx.drawImage(image, 0, 0);
+    if (ocrNamePreview) {
+      ocrNamePreview.src = previewCanvas.toDataURL('image/png');
+    }
+    updateDebugInfo({ capturedImageResolution: `${image.width} × ${image.height}` });
     setScanStage('Processing image', 'info');
     updateDebugInfo({ ocrStarted: 'Started', match: 'Running name OCR...' });
     setScanStage('OCR: reading card name', 'info');
-    const detectedName = await readCardName(image);
-    if (!detectedName) {
-      updateDebugInfo({ cardName: 'No text detected', match: 'No card name detected' });
+    const { lookupName, rawText, cleanedText } = await readCardName(image);
+    if (!lookupName) {
+      updateDebugInfo({
+        cardName: 'No text detected',
+        ocrRawText: rawText || '—',
+        ocrCleanedText: cleanedText || '—',
+        ocrNormalizedName: '—',
+        match: 'No card name detected'
+      });
       updateResult('No card name detected. Try a clearer photo.');
       setScanStage('Scan failed ✕', 'error');
       showScanFeedback('✕ Scan failed', 'error');
       return;
     }
 
-    updateDebugInfo({ cardName: detectedName });
+    updateDebugInfo({ cardName: cleanedText || rawText || lookupName });
     setScanStage('Searching database', 'info');
-    const cards = await fetchCardsByName(detectedName);
+    const cards = await fetchCardsByName(lookupName);
     updateDebugInfo({ apiCards: String(cards.length) });
     if (!cards.length) {
       updateDebugInfo({ match: 'No API cards returned for the name' });
@@ -862,7 +971,8 @@ async function recognizeImage(blob) {
     }
 
     setScanStage('OCR: reading set code', 'info');
-    const { text: rawSetText, codes } = await readSetCode(image);
+    const { text: rawSetText, cleanedText: cleanedSetText, codes } = await readSetCode(image);
+    updateDebugInfo({ setCodeOcr: cleanedSetText || rawSetText || '—' });
     updateDebugInfo({ setCode: codes.length ? codes.join(', ') : 'No set code detected' });
     if (!codes.length) {
       updateDebugInfo({ match: 'No set code detected' });
@@ -875,23 +985,29 @@ async function recognizeImage(blob) {
     setScanStage('Matching printing', 'info');
     let bestMatch = null;
     for (const card of cards) {
-      const nameComparison = compareNames(detectedName, card.name || '');
+      const nameComparison = compareNames(lookupName, card.name || '');
       const localMatch = findBestLocalMatch(codes, card);
       if (!localMatch) continue;
       const score = localMatch.score + (nameComparison.exact ? 2 : nameComparison.fuzzy ? 1 : 0);
+      const reason = nameComparison.exact
+        ? 'Exact card-name match with set-code match'
+        : nameComparison.fuzzy
+          ? 'Fuzzy card-name match with set-code match'
+          : 'Set-code match selected';
       if (!bestMatch || score > bestMatch.score || (score === bestMatch.score && (nameComparison.similarity || 0) > bestMatch.similarity)) {
         bestMatch = {
           card,
           printing: localMatch.printing,
           score,
           similarity: nameComparison.similarity || 0,
-          rawSetText
+          rawSetText,
+          reason
         };
       }
     }
 
     if (!bestMatch) {
-      updateDebugInfo({ match: 'No local match for the detected set code' });
+      updateDebugInfo({ match: 'No local match for the detected set code', matchReason: 'No matching printing found for the detected set code' });
       updateResult('No matching set code found locally.');
       setScanStage('Scan failed ✕', 'error');
       showScanFeedback('✕ Scan failed', 'error');
@@ -909,7 +1025,10 @@ async function recognizeImage(blob) {
       image: (card.card_images && card.card_images[0] && card.card_images[0].image_url) || ''
     };
 
-    updateDebugInfo({ match: `${matchedSetCode} — ${cardInfo.name || 'Unknown'}` });
+    updateDebugInfo({
+      match: `${matchedSetCode} — ${cardInfo.name || 'Unknown'}`,
+      matchReason: bestMatch.reason || 'Selected by set-code and name comparison'
+    });
     updateResult(`${matchedSetCode} — ${cardInfo.name || 'Unknown'} (${cardInfo.setName || edition})`);
     addEntry(matchedSetCode, cardInfo.name, rawSetText, edition, cardInfo.setName, cardInfo.rarity, cardInfo.image, 'high');
     showScanPreview(matchedSetCode);
