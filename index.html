@@ -27,10 +27,10 @@
           <span class="home-icon">📋</span>
           <span>Scan List</span>
         </button>
-        <button id="exportBtn" class="home-card" type="button">
-          <span class="home-icon">⬇️</span>
-          <span>Export CSV</span>
-        </button>
+            <button id="exportBtn" class="home-card" type="button">
+              <span class="home-icon">⬇️</span>
+              <span>Export PDF</span>
+            </button>
         <button id="clearBtn" class="home-card" type="button">
           <span class="home-icon">🗑️</span>
           <span>Clear</span>
@@ -84,6 +84,17 @@
             <div class="debug-info-title">Recognition Debug</div>
             <div id="debugInfoBody" class="debug-info-body"></div>
           </div>
+          <div id="manualSetModal" class="modal-overlay hidden" role="dialog" aria-modal="true">
+            <div class="modal-content">
+              <h3>Enter Set Code</h3>
+              <p>If OCR couldn't read the set code, type it here (example: LOB-001).</p>
+              <input id="manualSetInput" type="text" inputmode="text" placeholder="e.g. LOB-001" />
+              <div class="modal-actions">
+                <button id="manualSetConfirm" type="button">Confirm</button>
+                <button id="manualSetCancel" type="button">Cancel</button>
+              </div>
+            </div>
+          </div>
         </div>
       </div>
     </section>
@@ -115,6 +126,7 @@
   </main>
 
   <script src="https://cdn.jsdelivr.net/npm/tesseract.js@4.1.2/dist/tesseract.min.js"></script>
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/jspdf/2.5.1/jspdf.umd.min.js"></script>
   <script src="app.js" defer></script>
 </body>
 </html>

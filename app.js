@@ -31,6 +31,7 @@ const debugInfoBody = document.getElementById('debugInfoBody');
 
 let stream = null;
 let entries = JSON.parse(localStorage.getItem('ygoscanner_entries') || '[]');
+const debugEnabled = new URLSearchParams(location.search).get('debug') === '1';
 let feedbackTimer = null;
 let debugState = {
   imageDimensions: '—',
@@ -227,6 +228,10 @@ function resetDebugInfo() {
   renderDebugInfo();
 }
 
+// hide debug overlays unless explicitly enabled via ?debug=1
+if (cameraDebugOverlay) cameraDebugOverlay.style.display = debugEnabled ? 'block' : 'none';
+if (debugInfoBody) debugInfoBody.style.display = debugEnabled ? 'block' : 'none';
+
 function compareSetCodes(codeA, codeB) {
   const parse = code => {
     const match = /^([A-Z0-9]{2,4})-(\d{3})$/.exec(code || '');
@@ -242,7 +247,8 @@ function compareSetCodes(codeA, codeB) {
 function sortEntries() {
   entries.sort((a, b) => {
     const prefixCompare = compareSetCodes(a.setCode, b.setCode);
-    return prefixCompare !== 0 ? prefixCompare : a.scannedAt.localeCompare(b.scannedAt);
+    if (prefixCompare !== 0) return prefixCompare;
+    return (b.scannedAt || '').localeCompare(a.scannedAt || '');
   });
 }
 
@@ -256,77 +262,47 @@ function saveEntries() {
   localStorage.setItem('ygoscanner_entries', JSON.stringify(entries));
 }
 
+function findEntryIndex(setCode, edition) {
+  const norm = normalizeSetCodeCandidate(setCode || '');
+  for (let i = 0; i < entries.length; i++) {
+    const e = entries[i];
+    if (normalizeSetCodeCandidate(e.setCode) === norm && (e.edition || 'Other') === (edition || 'Other')) return i;
+  }
+  return -1;
+}
+
 function addEntry(setCode, name, rawText, edition, setName, rarity, image, confidence) {
   const now = new Date().toISOString().slice(0, 19).replace('T', ' ');
-  const entry = {
-    setCode,
-    name: name || 'Unknown',
-    setName: setName || '',
-    rarity: rarity || '',
-    image: image || '',
-    edition: edition || 'Other',
-    rawText: rawText || '',
-    scannedAt: now,
-    scannedDate: now,
-    confidence: confidence || 'low'
-  };
-  entries.unshift(entry);
+  const idx = findEntryIndex(setCode, edition);
+  if (idx >= 0) {
+    entries[idx].quantity = (entries[idx].quantity || 1) + 1;
+    entries[idx].scannedAt = now;
+    if (name && name.length > (entries[idx].name || '').length) entries[idx].name = name;
+    if (setName && setName.length > (entries[idx].setName || '').length) entries[idx].setName = setName;
+    if (rarity && rarity.length > (entries[idx].rarity || '').length) entries[idx].rarity = rarity;
+  } else {
+    const entry = {
+      setCode,
+      name: name || 'Unknown',
+      setName: setName || '',
+      rarity: rarity || '',
+      image: image || '',
+      edition: edition || 'Other',
+      rawText: rawText || '',
+      scannedAt: now,
+      scannedDate: now,
+      confidence: confidence || 'low',
+      quantity: 1
+    };
+    entries.unshift(entry);
+  }
   saveEntries();
   renderEntries();
 }
 
-function groupEntries() {
-  const grouped = entries.reduce((map, entry) => {
-    const edition = entry.edition || 'Other';
-    const key = `${entry.setCode}|${edition}`;
-    if (!map[key]) {
-      map[key] = {
-        setCode: entry.setCode,
-        edition,
-        name: entry.name || 'Unknown',
-        setName: entry.setName || '',
-        rarity: entry.rarity || '',
-        image: entry.image || '',
-        rawText: entry.rawText,
-        count: 0,
-        lastScannedAt: entry.scannedAt,
-      };
-    }
-    map[key].count += 1;
-    if (entry.name && entry.name !== 'Unknown' && entry.name.length > (map[key].name || '').length) {
-      map[key].name = entry.name;
-    }
-    if (entry.setName && entry.setName.length > (map[key].setName || '').length) {
-      map[key].setName = entry.setName;
-    }
-    if (entry.rarity && entry.rarity.length > (map[key].rarity || '').length) {
-      map[key].rarity = entry.rarity;
-    }
-    if (entry.image && !(map[key].image || '')) {
-      map[key].image = entry.image;
-    }
-    if ((entry.rawText || '').length > (map[key].rawText || '').length) {
-      map[key].rawText = entry.rawText;
-    }
-    if (entry.scannedAt > map[key].lastScannedAt) {
-      map[key].lastScannedAt = entry.scannedAt;
-    }
-    return map;
-  }, {});
-
-  return Object.values(grouped).sort((a, b) => {
-    const prefixCompare = compareSetCodes(a.setCode, b.setCode);
-    if (prefixCompare !== 0) return prefixCompare;
-    if (a.edition < b.edition) return -1;
-    if (a.edition > b.edition) return 1;
-    return a.lastScannedAt.localeCompare(b.lastScannedAt);
-  });
-}
-
 function renderEntries() {
-  const groupedEntries = groupEntries();
   if (!entriesTableBody) return;
-  entriesTableBody.innerHTML = groupedEntries.map((entry, index) => `
+  entriesTableBody.innerHTML = entries.map((entry, index) => `
     <tr>
       <td>${index + 1}</td>
       <td>${entry.setCode}</td>
@@ -334,8 +310,8 @@ function renderEntries() {
       <td>${entry.setName || ''}</td>
       <td>${entry.rarity || ''}</td>
       <td>${entry.edition}</td>
-      <td>${entry.count}</td>
-      <td>${entry.lastScannedAt}</td>
+      <td>${entry.quantity || 1}</td>
+      <td>${entry.scannedAt || ''}</td>
     </tr>
   `).join('');
 }
@@ -1056,7 +1032,11 @@ async function openCamera() {
 
   try {
     stream = await navigator.mediaDevices.getUserMedia({
-      video: { facingMode: 'environment' },
+      video: {
+        facingMode: { ideal: 'environment' },
+        width: { ideal: 1920 },
+        height: { ideal: 1080 }
+      },
       audio: false
     });
     if (video) {
@@ -1212,6 +1192,71 @@ function exportCsv() {
   logMessage('CSV downloaded.');
 }
 
+function exportPdf() {
+  if (!entries.length) {
+    logMessage('No saved entries to export.');
+    return;
+  }
+
+  const { jsPDF } = window.jspdf || {};
+  if (!jsPDF) {
+    logMessage('PDF library not available.');
+    return;
+  }
+
+  const doc = new jsPDF({ unit: 'pt', format: 'letter' });
+  const margin = 40;
+  const pageWidth = doc.internal.pageSize.getWidth();
+  const usableWidth = pageWidth - margin * 2;
+  const lineHeight = 14;
+  const headerY = 60;
+  const titleSize = 16;
+
+  const today = new Date().toISOString().slice(0, 10);
+  doc.setFontSize(titleSize);
+  doc.text('Yu-Gi-Oh! Collection', margin, headerY);
+  doc.setFontSize(10);
+  doc.text(`Export date: ${today}`, margin, headerY + 18);
+
+  const tableTop = headerY + 40;
+  const colWidths = [usableWidth * 0.6, usableWidth * 0.25, usableWidth * 0.15];
+
+  let y = tableTop;
+  doc.setFontSize(11);
+  doc.text('Card Name', margin, y);
+  doc.text('Set Code', margin + colWidths[0], y);
+  doc.text('Qty', margin + colWidths[0] + colWidths[1], y);
+  y += lineHeight;
+  doc.setLineWidth(0.5);
+  doc.line(margin, y - 6, pageWidth - margin, y - 6);
+
+  for (const entry of entries) {
+    const name = entry.name || '';
+    const code = entry.setCode || '';
+    const qty = String(entry.quantity || 1);
+
+    // Wrap long card names
+    const maxNameWidth = colWidths[0];
+    const splitName = doc.splitTextToSize(name, maxNameWidth);
+    for (let i = 0; i < splitName.length; i++) {
+      if (y + lineHeight > doc.internal.pageSize.getHeight() - margin) {
+        doc.addPage();
+        y = margin;
+      }
+      const text = splitName[i];
+      doc.text(text, margin, y);
+      if (i === 0) {
+        doc.text(code, margin + colWidths[0], y);
+        doc.text(qty, margin + colWidths[0] + colWidths[1], y);
+      }
+      y += lineHeight;
+    }
+  }
+
+  doc.save('yugioh-collection.pdf');
+  logMessage('PDF exported.');
+}
+
 function clearSheet() {
   if (!confirm('Clear all scanned entries from the sheet?')) return;
   entries = [];
@@ -1240,7 +1285,7 @@ if (fileInput) {
     }
   });
 }
-if (exportBtn) exportBtn.addEventListener('click', exportCsv);
+if (exportBtn) exportBtn.addEventListener('click', exportPdf);
 if (clearBtn) clearBtn.addEventListener('click', clearSheet);
 if (scanListBack) scanListBack.addEventListener('click', showHomeScreen);
 
