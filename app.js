@@ -28,11 +28,16 @@ const cameraDebugOverlay = document.getElementById('cameraDebugOverlay');
 const cameraDebugBody = document.getElementById('cameraDebugBody');
 const ocrNamePreview = document.getElementById('ocrNamePreview');
 const debugInfoBody = document.getElementById('debugInfoBody');
+const manualSetModal = document.getElementById('manualSetModal');
+const manualSetInput = document.getElementById('manualSetInput');
+const manualSetConfirm = document.getElementById('manualSetConfirm');
+const manualSetCancel = document.getElementById('manualSetCancel');
 
 let stream = null;
 let entries = JSON.parse(localStorage.getItem('ygoscanner_entries') || '[]');
 const debugEnabled = new URLSearchParams(location.search).get('debug') === '1';
 let feedbackTimer = null;
+let pendingCardData = null;
 let debugState = {
   imageDimensions: '—',
   capturedImageResolution: '—',
@@ -226,6 +231,84 @@ function resetDebugInfo() {
     matchReason: '—'
   };
   renderDebugInfo();
+}
+
+// Manual Set Code Modal Functions
+function showManualSetModal(cardName) {
+  if (!manualSetModal) return;
+  manualSetInput.value = '';
+  manualSetInput.focus();
+  manualSetModal.classList.remove('hidden');
+  // Update the modal to show the card name
+  const modalP = manualSetModal.querySelector('p');
+  if (modalP) {
+    modalP.textContent = `Card found: ${cardName}\n\nSet code could not be reliably detected. Please enter the set code manually (example: LOB-001).`;
+  }
+}
+
+function hideManualSetModal() {
+  if (!manualSetModal) return;
+  manualSetModal.classList.add('hidden');
+  manualSetInput.value = '';
+  pendingCardData = null;
+}
+
+function handleManualSetCodeConfirm() {
+  if (!manualSetInput.value.trim() || !pendingCardData) {
+    logMessage('Please enter a valid set code.');
+    return;
+  }
+
+  const userSetCode = manualSetInput.value.trim().toUpperCase();
+  const normalized = normalizeSetCodeCandidate(userSetCode);
+
+  if (!isValidSetCode(normalized)) {
+    logMessage('Invalid set code format. Try again (e.g., LOB-001).');
+    manualSetInput.value = '';
+    manualSetInput.focus();
+    return;
+  }
+
+  // Verify the set code against YGOPRODeck data
+  const cardData = pendingCardData;
+  const variants = buildSetCodeVariants(normalized);
+  let foundPrinting = null;
+
+  for (const variant of variants) {
+    const printings = cardData.card.card_sets || [];
+    for (const printing of printings) {
+      const printingCode = normalizeSetCodeCandidate(printing.set_code || '');
+      if (variant === printingCode) {
+        foundPrinting = printing;
+        break;
+      }
+    }
+    if (foundPrinting) break;
+  }
+
+  if (!foundPrinting) {
+    logMessage('Set code not found for this card. Try another code.');
+    manualSetInput.value = '';
+    manualSetInput.focus();
+    return;
+  }
+
+  // Set code is valid and matches the card
+  hideManualSetModal();
+  const edition = detectEdition(userSetCode);
+  addEntry(
+    normalized,
+    cardData.card.name || 'Unknown',
+    userSetCode,
+    edition,
+    foundPrinting.set_name || '',
+    foundPrinting.set_rarity || '',
+    cardData.image || '',
+    'high'
+  );
+  showScanPreview(normalized);
+  setScanStage('Card saved ✓', 'success');
+  showScanFeedback('✓ Card saved', 'success');
 }
 
 // hide debug overlays unless explicitly enabled via ?debug=1
@@ -920,6 +1003,7 @@ async function recognizeImage(blob) {
     updateDebugInfo({ ocrStarted: 'Started', match: 'Running name OCR...' });
     setScanStage('OCR: reading card name', 'info');
     const { lookupName, rawText, cleanedText } = await readCardName(image);
+    
     if (!lookupName) {
       updateDebugInfo({
         cardName: 'No text detected',
@@ -938,6 +1022,7 @@ async function recognizeImage(blob) {
     setScanStage('Searching database', 'info');
     const cards = await fetchCardsByName(lookupName);
     updateDebugInfo({ apiCards: String(cards.length) });
+    
     if (!cards.length) {
       updateDebugInfo({ match: 'No API cards returned for the name' });
       updateResult('No matching card found by name.');
@@ -950,26 +1035,56 @@ async function recognizeImage(blob) {
     const { text: rawSetText, cleanedText: cleanedSetText, codes } = await readSetCode(image);
     updateDebugInfo({ setCodeOcr: cleanedSetText || rawSetText || '—' });
     updateDebugInfo({ setCode: codes.length ? codes.join(', ') : 'No set code detected' });
+    
+    // If no set code detected, ask user for manual entry
     if (!codes.length) {
-      updateDebugInfo({ match: 'No set code detected' });
-      updateResult('No set code detected. Align the code inside the guide.');
-      setScanStage('Scan failed ✕', 'error');
-      showScanFeedback('✕ Scan failed', 'error');
+      setScanStage('Manual set code needed', 'info');
+      updateResult('Set code could not be detected. Please enter it manually.');
+      
+      // Find the best matching card by name
+      let bestCard = null;
+      for (const card of cards) {
+        const nameComparison = compareNames(lookupName, card.name || '');
+        if (!bestCard || nameComparison.exact || (nameComparison.fuzzy && (nameComparison.similarity || 0) > (bestCard.similarity || 0))) {
+          bestCard = { card, similarity: nameComparison.similarity || 0, exact: nameComparison.exact };
+        }
+      }
+
+      if (!bestCard) {
+        updateResult('No matching card found.');
+        setScanStage('Scan failed ✕', 'error');
+        showScanFeedback('✕ Scan failed', 'error');
+        return;
+      }
+
+      // Store card data and show manual entry modal
+      pendingCardData = {
+        card: bestCard.card,
+        image: (bestCard.card.card_images && bestCard.card.card_images[0] && bestCard.card.card_images[0].image_url) || ''
+      };
+      
+      showManualSetModal(bestCard.card.name || 'Unknown Card');
+      updateDebugInfo({ match: 'Waiting for manual set code entry' });
+      showScanFeedback('⚠ Enter set code manually', 'info');
       return;
     }
 
     setScanStage('Matching printing', 'info');
     let bestMatch = null;
+    
     for (const card of cards) {
       const nameComparison = compareNames(lookupName, card.name || '');
       const localMatch = findBestLocalMatch(codes, card);
+      
       if (!localMatch) continue;
+      
       const score = localMatch.score + (nameComparison.exact ? 2 : nameComparison.fuzzy ? 1 : 0);
       const reason = nameComparison.exact
         ? 'Exact card-name match with set-code match'
         : nameComparison.fuzzy
           ? 'Fuzzy card-name match with set-code match'
           : 'Set-code match selected';
+      
       if (!bestMatch || score > bestMatch.score || (score === bestMatch.score && (nameComparison.similarity || 0) > bestMatch.similarity)) {
         bestMatch = {
           card,
@@ -984,7 +1099,27 @@ async function recognizeImage(blob) {
 
     if (!bestMatch) {
       updateDebugInfo({ match: 'No local match for the detected set code', matchReason: 'No matching printing found for the detected set code' });
-      updateResult('No matching set code found locally.');
+      updateResult('Set code not found for this card. Please enter manually.');
+      
+      // Get best matching card by name
+      let bestCard = null;
+      for (const card of cards) {
+        const nameComparison = compareNames(lookupName, card.name || '');
+        if (!bestCard || nameComparison.exact || (nameComparison.fuzzy && (nameComparison.similarity || 0) > (bestCard.similarity || 0))) {
+          bestCard = { card, similarity: nameComparison.similarity || 0, exact: nameComparison.exact };
+        }
+      }
+
+      if (bestCard) {
+        pendingCardData = {
+          card: bestCard.card,
+          image: (bestCard.card.card_images && bestCard.card.card_images[0] && bestCard.card.card_images[0].image_url) || ''
+        };
+        showManualSetModal(bestCard.card.name || 'Unknown Card');
+        showScanFeedback('⚠ Enter set code manually', 'info');
+        return;
+      }
+      
       setScanStage('Scan failed ✕', 'error');
       showScanFeedback('✕ Scan failed', 'error');
       return;
@@ -1140,58 +1275,6 @@ function handleFileUpload(file) {
   reader.readAsDataURL(file);
 }
 
-function exportCsv() {
-  if (!entries.length) {
-    logMessage('No saved entries to export.');
-    return;
-  }
-
-  const grouped = entries.reduce((map, entry) => {
-    const key = entry.setCode;
-    if (!map[key]) {
-      map[key] = {
-        setCode: entry.setCode,
-        name: entry.name || 'Unknown',
-        setName: entry.setName || '',
-        rarity: entry.rarity || '',
-        lastScannedAt: entry.scannedAt
-      };
-    }
-    if (entry.name && entry.name.length > (map[key].name || '').length) map[key].name = entry.name;
-    if (entry.setName && entry.setName.length > (map[key].setName || '').length) map[key].setName = entry.setName;
-    if (entry.rarity && entry.rarity.length > (map[key].rarity || '').length) map[key].rarity = entry.rarity;
-    if (entry.scannedAt > map[key].lastScannedAt) map[key].lastScannedAt = entry.scannedAt;
-    return map;
-  }, {});
-
-  const uniqueEntries = Object.values(grouped).sort((a, b) => {
-    const prefixCompare = compareSetCodes(a.setCode, b.setCode);
-    if (prefixCompare !== 0) return prefixCompare;
-    return (a.lastScannedAt || '').localeCompare(b.lastScannedAt || '');
-  });
-
-  const header = ['Set Code', 'Card Name', 'Set Name', 'Rarity', 'Scan Date'];
-  const rows = uniqueEntries.map(entry => [
-    entry.setCode,
-    (entry.name || '').replace(/"/g, '""'),
-    (entry.setName || '').replace(/"/g, '""'),
-    (entry.rarity || '').replace(/"/g, '""'),
-    entry.lastScannedAt || ''
-  ]);
-
-  const csv = [header, ...rows].map(row => row.map(value => `"${value}"`).join(',')).join('\n');
-  const blob = new Blob([csv], { type: 'text/csv;charset=utf-8;' });
-  const url = URL.createObjectURL(blob);
-  const link = document.createElement('a');
-  link.href = url;
-  link.download = 'yugioh-setcodes.csv';
-  document.body.appendChild(link);
-  link.click();
-  document.body.removeChild(link);
-  URL.revokeObjectURL(url);
-  logMessage('CSV downloaded.');
-}
-
 function exportPdf() {
   if (!entries.length) {
     logMessage('No saved entries to export.');
@@ -1207,54 +1290,88 @@ function exportPdf() {
   const doc = new jsPDF({ unit: 'pt', format: 'letter' });
   const margin = 40;
   const pageWidth = doc.internal.pageSize.getWidth();
+  const pageHeight = doc.internal.pageSize.getHeight();
   const usableWidth = pageWidth - margin * 2;
   const lineHeight = 14;
-  const headerY = 60;
-  const titleSize = 16;
+  let y = margin;
 
-  const today = new Date().toISOString().slice(0, 10);
-  doc.setFontSize(titleSize);
-  doc.text('Yu-Gi-Oh! Collection', margin, headerY);
+  // Title
+  doc.setFontSize(16);
+  doc.setFont(undefined, 'bold');
+  doc.text('Yu-Gi-Oh! Collection', margin, y);
+  y += 20;
+
+  // Export date
   doc.setFontSize(10);
-  doc.text(`Export date: ${today}`, margin, headerY + 18);
+  doc.setFont(undefined, 'normal');
+  const today = new Date().toISOString().slice(0, 10);
+  doc.text(`Export date: ${today}`, margin, y);
+  y += 16;
 
-  const tableTop = headerY + 40;
-  const colWidths = [usableWidth * 0.6, usableWidth * 0.25, usableWidth * 0.15];
-
-  let y = tableTop;
+  // Table header
+  const colWidths = [usableWidth * 0.5, usableWidth * 0.3, usableWidth * 0.2];
   doc.setFontSize(11);
+  doc.setFont(undefined, 'bold');
   doc.text('Card Name', margin, y);
   doc.text('Set Code', margin + colWidths[0], y);
   doc.text('Qty', margin + colWidths[0] + colWidths[1], y);
   y += lineHeight;
+
+  // Draw separator line
   doc.setLineWidth(0.5);
   doc.line(margin, y - 6, pageWidth - margin, y - 6);
+  y += 4;
+
+  // Table rows
+  doc.setFontSize(10);
+  doc.setFont(undefined, 'normal');
 
   for (const entry of entries) {
-    const name = entry.name || '';
+    const name = entry.name || 'Unknown';
     const code = entry.setCode || '';
     const qty = String(entry.quantity || 1);
 
-    // Wrap long card names
-    const maxNameWidth = colWidths[0];
-    const splitName = doc.splitTextToSize(name, maxNameWidth);
-    for (let i = 0; i < splitName.length; i++) {
-      if (y + lineHeight > doc.internal.pageSize.getHeight() - margin) {
-        doc.addPage();
-        y = margin;
-      }
-      const text = splitName[i];
-      doc.text(text, margin, y);
-      if (i === 0) {
-        doc.text(code, margin + colWidths[0], y);
-        doc.text(qty, margin + colWidths[0] + colWidths[1], y);
-      }
+    // Check if we need a new page
+    if (y + lineHeight > pageHeight - margin) {
+      doc.addPage();
+      y = margin;
+      
+      // Repeat header on new page
+      doc.setFontSize(11);
+      doc.setFont(undefined, 'bold');
+      doc.text('Card Name', margin, y);
+      doc.text('Set Code', margin + colWidths[0], y);
+      doc.text('Qty', margin + colWidths[0] + colWidths[1], y);
       y += lineHeight;
+      doc.setLineWidth(0.5);
+      doc.line(margin, y - 6, pageWidth - margin, y - 6);
+      y += 4;
+      doc.setFontSize(10);
+      doc.setFont(undefined, 'normal');
     }
+
+    // Wrap long card names
+    const maxNameWidth = colWidths[0] - 4;
+    const splitName = doc.splitTextToSize(name, maxNameWidth);
+    
+    let rowHeight = lineHeight;
+    if (splitName.length > 1) {
+      rowHeight = lineHeight * splitName.length;
+    }
+
+    for (let i = 0; i < splitName.length; i++) {
+      const text = splitName[i];
+      doc.text(text, margin, y + (i * lineHeight));
+    }
+
+    doc.text(code, margin + colWidths[0], y);
+    doc.text(qty, margin + colWidths[0] + colWidths[1], y);
+    
+    y += rowHeight + 2;
   }
 
   doc.save('yugioh-collection.pdf');
-  logMessage('PDF exported.');
+  logMessage('PDF exported successfully.');
 }
 
 function clearSheet() {
@@ -1288,6 +1405,21 @@ if (fileInput) {
 if (exportBtn) exportBtn.addEventListener('click', exportPdf);
 if (clearBtn) clearBtn.addEventListener('click', clearSheet);
 if (scanListBack) scanListBack.addEventListener('click', showHomeScreen);
+
+// Manual set code modal event listeners
+if (manualSetConfirm) {
+  manualSetConfirm.addEventListener('click', handleManualSetCodeConfirm);
+}
+if (manualSetCancel) {
+  manualSetCancel.addEventListener('click', hideManualSetModal);
+}
+if (manualSetInput) {
+  manualSetInput.addEventListener('keypress', (e) => {
+    if (e.key === 'Enter') {
+      handleManualSetCodeConfirm();
+    }
+  });
+}
 
 sortEntries();
 renderEntries();

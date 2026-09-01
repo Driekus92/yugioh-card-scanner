@@ -1,11 +1,12 @@
-const CACHE_NAME = 'ygoscanner-cache-v4';
+const CACHE_NAME = 'ygoscanner-cache-v5';
 const ASSETS = [
   '.',
   'index.html',
   'styles.css',
   'app.js',
   'manifest.json',
-  'icon.svg'
+  'icon.svg',
+  'lib/jspdf.umd.min.js'
 ];
 
 self.addEventListener('install', event => {
