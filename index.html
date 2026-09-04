@@ -1,5 +1,5 @@
 <!doctype html>
-<html lang="en">
+<html lang="nl">
 <head>
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover" />
@@ -7,7 +7,7 @@
   <meta name="apple-mobile-web-app-capable" content="yes" />
   <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
   <link rel="apple-touch-icon" href="icon.svg" />
-  <title>Yugioh Setcode Scanner</title>
+  <title>Yu-Gi-Oh! kaartscanner</title>
   <link rel="manifest" href="manifest.json" />
   <link rel="stylesheet" href="styles.css" />
 </head>
@@ -21,78 +21,97 @@
       <div class="home-grid">
         <button id="openCameraBtn" class="home-card" type="button">
           <span class="home-icon">📷</span>
-          <span>Open Camera</span>
+          <span>Scanner openen</span>
         </button>
         <button id="scanListBtn" class="home-card" type="button">
           <span class="home-icon">📋</span>
-          <span>Scan List</span>
+          <span>Scanlijst</span>
         </button>
-            <button id="exportBtn" class="home-card" type="button">
-              <span class="home-icon">⬇️</span>
-              <span>Export PDF</span>
-            </button>
+        <button id="exportBtn" class="home-card" type="button">
+          <span class="home-icon">⬇️</span>
+          <span>Exporteren naar Excel</span>
+        </button>
         <button id="clearBtn" class="home-card" type="button">
           <span class="home-icon">🗑️</span>
-          <span>Clear</span>
+          <span>Lijst wissen</span>
         </button>
       </div>
 
-      <p class="home-note">Tap Open Camera to start scanning Yu-Gi-Oh set codes.</p>
+      <p class="home-note">Maak per kaart één foto. De scanner zoekt eerst de kaartnaam op en controleert daarna de set-code.</p>
+      <p id="homeStatus" class="home-status" role="status" aria-live="polite"></p>
     </section>
 
-    <section class="scanner-screen hidden">
+    <section class="scanner-screen hidden" aria-label="Kaartscanner">
       <div class="camera-panel">
-        <button id="captureBtn" hidden></button>
-        <button id="uploadBtn" type="button" hidden>Upload Image</button>
         <input id="fileInput" type="file" accept="image/*" capture="environment" hidden />
 
         <div class="preview">
           <div class="video-frame">
-            <video id="video" playsinline autoplay muted></video>
+            <video id="video" playsinline autoplay muted aria-hidden="true"></video>
+            <img id="capturedPreview" class="captured-preview hidden" alt="Vastgelegde foto van de kaart" />
             <div class="camera-guide">
-            <div id="scanTopFeedback" class="scan-top-feedback" aria-live="polite">
-              <span id="scanTopFeedbackText" class="scan-top-feedback-text"></span>
-            </div>
-            <div id="cameraStatusOverlay" class="camera-status-overlay" aria-live="polite">
-              <span id="cameraStatusText" class="camera-status-text">Camera ready</span>
-            </div>
-            <div id="cameraDebugOverlay" class="camera-debug-overlay" aria-live="polite">
-              <div class="camera-debug-title">OCR Debug</div>
-              <div id="cameraDebugBody" class="camera-debug-body"></div>
-              <img id="ocrNamePreview" class="ocr-name-preview" alt="OCR card name preview" />
-            </div>
-            <div class="guide-window">
-            </div>
-            <div id="scanPreview" class="scan-preview" aria-live="polite">
-              <span id="scanPreviewCode" class="scan-preview-text"></span>
-            </div>
-            <div class="camera-actions">
-              <button id="closeCameraBtn" class="close-camera" type="button">Close</button>
-              <button id="scanBtn" class="scan-button" type="button">Scan Card</button>
-            </div>
+              <div id="cameraStatusOverlay" class="camera-status-overlay info">
+                <div class="camera-status-summary">
+                  <span id="cameraStatusText" class="camera-status-text" role="status" aria-live="polite" aria-atomic="true">Camera gereed</span>
+                  <span id="scanCount" class="scan-count">0 kaarten gescand</span>
+                </div>
+                <div class="scan-progress-row">
+                  <progress id="scanProgress" class="scan-progress" max="100" value="0" aria-label="Voortgang van de kaartscan"></progress>
+                  <span id="scanProgressText" class="scan-progress-text">0%</span>
+                </div>
+              </div>
+
+              <div id="cameraDebugOverlay" class="camera-debug-overlay" aria-live="off" aria-hidden="true">
+                <div class="camera-debug-title">OCR-debug</div>
+                <div id="cameraDebugBody" class="camera-debug-body"></div>
+                <img id="ocrNamePreview" class="ocr-name-preview" alt="Voorbeeld van het gelezen kaartnaamgebied" />
+              </div>
+
+              <div class="card-positioner">
+                <p id="cardPlacementInstruction" class="guide-instruction">
+                  <strong>Leg de hele kaart binnen het kader</strong>
+                  <span>Houd de kaart recht, stil en zonder lichtreflectie.</span>
+                </p>
+                <div class="guide-window" aria-hidden="true">
+                  <span class="guide-corner top-left"></span>
+                  <span class="guide-corner top-right"></span>
+                  <span class="guide-corner bottom-left"></span>
+                  <span class="guide-corner bottom-right"></span>
+                </div>
+              </div>
+
+              <div class="camera-actions">
+                <button id="scanBtn" class="scan-button" type="button" aria-describedby="cardPlacementInstruction">Foto maken en scannen</button>
+                <button id="uploadBtn" class="upload-camera" type="button">Foto maken of kiezen</button>
+                <button id="closeCameraBtn" class="close-camera" type="button">Sluiten</button>
+              </div>
             </div>
           </div>
           <canvas id="canvas" hidden></canvas>
         </div>
 
         <div class="status-card">
-          <h2>Scan Result</h2>
-          <div id="scanStageBadge" class="scan-stage-badge info">Camera ready</div>
-          <div id="scanResult" class="result">No scan yet.</div>
-          <div id="status" class="status">Ready.</div>
-          <div id="debugInfo" class="debug-info" aria-live="polite">
-            <div class="debug-info-title">Recognition Debug</div>
+          <h2>Scanresultaat</h2>
+          <div id="scanStageBadge" class="scan-stage-badge info">Camera gereed</div>
+          <div id="scanResult" class="result">Nog geen kaart gescand.</div>
+          <div id="status" class="status">Klaar om te scannen.</div>
+          <div id="debugInfo" class="debug-info" aria-live="off">
+            <div class="debug-info-title">Herkenningsdebug</div>
             <div id="debugInfoBody" class="debug-info-body"></div>
           </div>
-          <div id="manualSetModal" class="modal-overlay hidden" role="dialog" aria-modal="true">
-            <div class="modal-content">
-              <h3>Enter Set Code</h3>
-              <p>If OCR couldn't read the set code, type it here (example: LOB-001).</p>
-              <input id="manualSetInput" type="text" inputmode="text" placeholder="e.g. LOB-001" />
-              <div class="modal-actions">
-                <button id="manualSetConfirm" type="button">Confirm</button>
-                <button id="manualSetCancel" type="button">Cancel</button>
-              </div>
+        </div>
+
+        <div id="manualSetModal" class="modal-overlay hidden" role="dialog" aria-modal="true" aria-labelledby="manualSetTitle" aria-describedby="manualSetDescription">
+          <div class="modal-content" tabindex="-1">
+            <h3 id="manualSetTitle">Set-code invoeren</h3>
+            <p id="manualSetDescription">De set-code kon niet betrouwbaar worden gelezen. Vul deze handmatig in.</p>
+            <label for="manualSetInput">Set-code</label>
+            <input id="manualSetInput" type="text" inputmode="text" autocomplete="off" autocapitalize="characters" spellcheck="false" enterkeyhint="done" placeholder="Bijvoorbeeld LOB-001" aria-required="true" aria-invalid="false" aria-describedby="manualSetHint manualSetError" />
+            <small id="manualSetHint" class="field-hint">De code staat meestal rechts onder de afbeelding op de kaart.</small>
+            <p id="manualSetError" class="field-error" role="alert" aria-live="assertive"></p>
+            <div class="modal-actions">
+              <button id="manualSetConfirm" type="button">Bevestigen</button>
+              <button id="manualSetCancel" type="button">Annuleren</button>
             </div>
           </div>
         </div>
@@ -101,32 +120,31 @@
 
     <section class="entries-panel hidden">
       <div class="entries-header">
-        <h2>Scanned Set Codes</h2>
-        <button id="scanListBack" class="back-button" type="button">Back</button>
+        <h2>Gescande kaarten</h2>
+        <button id="scanListBack" class="back-button" type="button">Terug</button>
       </div>
       <div class="table-wrapper">
         <table id="entriesTable">
+          <caption class="visually-hidden">Lijst met gescande Yu-Gi-Oh!-kaarten</caption>
           <thead>
             <tr>
-              <th>#</th>
-              <th>Set Code</th>
-              <th>Card Name</th>
-              <th>Set Name</th>
-              <th>Rarity</th>
-              <th>Edition</th>
-              <th>Count</th>
-              <th>Last Scanned</th>
+              <th scope="col">#</th>
+              <th scope="col">Kaartnaam</th>
+              <th scope="col">Set-code</th>
+              <th scope="col">Aantal</th>
+              <th scope="col">Laatst gescand</th>
             </tr>
           </thead>
           <tbody></tbody>
         </table>
       </div>
-      <p class="note">The export is saved as a CSV file that can be opened in Excel and includes edition and duplicate counts.</p>
+      <p class="note">De export wordt opgeslagen als Excel-bestand. De kolom <q>Waarde</q> blijft leeg, zodat die later kan worden aangevuld.</p>
     </section>
   </main>
 
-  <script src="https://cdn.jsdelivr.net/npm/tesseract.js@4.1.2/dist/tesseract.min.js"></script>
-  <script src="lib/jspdf.umd.min.js" defer></script>
+  <script src="https://cdn.jsdelivr.net/npm/tesseract.js@6.0.1/dist/tesseract.min.js" defer></script>
+  <script src="scanner-core.js" defer></script>
+  <script src="excel-export.js" defer></script>
   <script src="app.js" defer></script>
 </body>
 </html>
