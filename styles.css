@@ -345,6 +345,35 @@ video,
   border-radius: 0 0 15px;
 }
 
+/* Live set-code read zone: focused on the lower-right area used by buildSetCodeOcrVariants(). */
+.setcode-zone {
+  position: absolute;
+  left: 40%;
+  top: 73%;
+  width: 57%;
+  height: 22%;
+  box-sizing: border-box;
+  border: 2px dashed rgba(56, 189, 248, 0.98);
+  border-radius: 8px;
+  background: rgba(56, 189, 248, 0.12);
+  box-shadow: 0 0 0 1px rgba(3, 7, 18, 0.4), 0 0 14px rgba(56, 189, 248, 0.25);
+}
+
+.setcode-zone-label {
+  position: absolute;
+  right: 6px;
+  top: 5px;
+  padding: 3px 7px;
+  border-radius: 999px;
+  background: rgba(2, 12, 24, 0.82);
+  border: 1px solid rgba(125, 211, 252, 0.7);
+  color: #e0f2fe;
+  font-size: 0.68rem;
+  font-weight: 800;
+  letter-spacing: 0.08em;
+  text-shadow: 0 1px 3px rgba(0, 0, 0, 0.8);
+}
+
 .camera-status-overlay {
   position: absolute;
   top: max(12px, env(safe-area-inset-top));

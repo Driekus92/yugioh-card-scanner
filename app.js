@@ -540,21 +540,23 @@
   }
 
   function buildSetCodeOcrVariants(cardCanvas) {
-    // Set-codes verschuiven per layout/print, dus scan meerdere banden i.p.v. één vaste crop.
+    // De set-code staat bij Yu-Gi-Oh!-kaarten doorgaans laag en rechts.
+    // We scannen daarom meerdere overlappende zones in het onderste kwart,
+    // met één bredere fallback voor uitzonderlijke layouts.
     const regions = [
-      { x: 0.62, y: 0.60, width: 0.35, height: 0.13, targetWidth: 1700, binary: false },
-      { x: 0.70, y: 0.64, width: 0.29, height: 0.10, targetWidth: 1800, binary: true },
-      { x: 0.33, y: 0.60, width: 0.64, height: 0.17, targetWidth: 1600, binary: false },
-      { x: 0.03, y: 0.62, width: 0.52, height: 0.16, targetWidth: 1500, binary: false },
-      { x: 0.03, y: 0.57, width: 0.94, height: 0.24, targetWidth: 1600, binary: false },
-      { x: 0.22, y: 0.64, width: 0.74, height: 0.12, targetWidth: 1800, binary: true }
+      { x: 0.50, y: 0.76, width: 0.47, height: 0.11, targetWidth: 2200, binary: false, psm: '7' },
+      { x: 0.57, y: 0.80, width: 0.40, height: 0.10, targetWidth: 2400, binary: true, psm: '7' },
+      { x: 0.40, y: 0.78, width: 0.57, height: 0.15, targetWidth: 2200, binary: false, psm: '11' },
+      { x: 0.62, y: 0.74, width: 0.35, height: 0.18, targetWidth: 2200, binary: false, psm: '6' },
+      { x: 0.46, y: 0.83, width: 0.50, height: 0.09, targetWidth: 2400, binary: true, psm: '7' },
+      { x: 0.20, y: 0.75, width: 0.77, height: 0.22, targetWidth: 2000, binary: false, psm: '11' }
     ];
     return regions.map(region => ({
       image: preprocessTextCanvas(
         cropFraction(cardCanvas, region.x, region.y, region.width, region.height),
         { targetWidth: region.targetWidth, binary: region.binary }
       ),
-      psm: region.binary ? '7' : '6'
+      psm: region.psm || (region.binary ? '7' : '6')
     }));
   }
 
