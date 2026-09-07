@@ -225,9 +225,25 @@
     return candidates;
   }
 
+  const OCR_PREFIX_GROUPS = [
+    new Set(['O', '0', 'Q']),
+    new Set(['S', '5', 'O']),
+    new Set(['D', '0']),
+    new Set(['B', '8']),
+    new Set(['G', '6']),
+    new Set(['Z', '2']),
+    new Set(['I', '1', 'L']),
+    new Set(['T', '7'])
+  ];
+
   function sameOcrDigitGroup(left, right) {
     if (left === right) return true;
     return OCR_DIGIT_GROUPS.some(group => group.has(left) && group.has(right));
+  }
+
+  function sameOcrPrefixGroup(left, right) {
+    if (left === right) return true;
+    return OCR_PREFIX_GROUPS.some(group => group.has(left) && group.has(right));
   }
 
   function compareSetCodeCandidate(ocrCandidate, apiSetCode) {
@@ -245,17 +261,64 @@
     if (candidate.normalized === api.normalized) {
       return { ...noMatch, matched: true, exact: true, score: 1 };
     }
-    if (candidate.prefix.length !== api.prefix.length || candidate.suffix.length !== api.suffix.length) {
+    if (candidate.suffix.length !== api.suffix.length) {
       return noMatch;
     }
 
     const corrections = [];
-    for (let index = 0; index < api.prefix.length; index += 1) {
-      const from = candidate.prefix[index];
-      const to = api.prefix[index];
-      if (from === to) continue;
-      if (!sameOcrDigitGroup(from, to)) return noMatch;
-      corrections.push({ section: 'prefix', index, from, to });
+
+    // OCR laat bij kleine setcodes soms één karakter weg of verwisselt één
+    // letter, bijvoorbeeld "SDY-003" -> "OY-003". Vergelijk daarom het
+    // prefix met maximaal één invoeging/verwijdering en maximaal één bekende
+    // OCR-letterverwisseling. De suffix moet dezelfde lengte houden.
+    if (candidate.prefix.length === api.prefix.length) {
+      for (let index = 0; index < api.prefix.length; index += 1) {
+        const from = candidate.prefix[index];
+        const to = api.prefix[index];
+        if (from === to) continue;
+        if (!sameOcrPrefixGroup(from, to)) return noMatch;
+        corrections.push({ section: 'prefix', index, from, to });
+      }
+    } else if (Math.abs(candidate.prefix.length - api.prefix.length) === 1) {
+      const shorter = candidate.prefix.length < api.prefix.length ? candidate.prefix : api.prefix;
+      const longer = candidate.prefix.length < api.prefix.length ? api.prefix : candidate.prefix;
+      let bestAlignment = null;
+
+      for (let skipped = 0; skipped < longer.length; skipped += 1) {
+        let shortIndex = 0;
+        let substitutions = 0;
+        const alignment = [];
+        let valid = true;
+        for (let longIndex = 0; longIndex < longer.length; longIndex += 1) {
+          if (longIndex === skipped) continue;
+          if (shortIndex >= shorter.length) { valid = false; break; }
+          const longChar = longer[longIndex];
+          const shortChar = shorter[shortIndex];
+          if (longChar !== shortChar) {
+            if (!sameOcrPrefixGroup(longChar, shortChar)) { valid = false; break; }
+            substitutions += 1;
+            alignment.push({ section: 'prefix', index: longIndex, from: shortChar, to: longChar });
+          }
+          shortIndex += 1;
+        }
+        if (valid && shortIndex === shorter.length && substitutions <= 1) {
+          const omitted = {
+            section: 'prefix',
+            index: skipped,
+            from: candidate.prefix.length > api.prefix.length ? candidate.prefix[skipped] : '',
+            to: api.prefix.length > candidate.prefix.length ? api.prefix[skipped] : ''
+          };
+          const score = substitutions;
+          if (!bestAlignment || score < bestAlignment.substitutions) {
+            bestAlignment = { substitutions, corrections: [omitted, ...alignment] };
+          }
+        }
+      }
+
+      if (!bestAlignment) return noMatch;
+      corrections.push(...bestAlignment.corrections);
+    } else {
+      return noMatch;
     }
 
     const numericMatch = /[0-9]+$/.exec(api.suffix);
@@ -271,7 +334,9 @@
 
     if (!corrections.length || corrections.length > 3) return noMatch;
     const penalty = corrections.reduce((sum, correction) => (
-      sum + (correction.section === 'prefix' ? 0.1 : 0.06)
+      sum + (correction.section === 'prefix'
+        ? (correction.from && correction.to ? 0.10 : 0.14)
+        : 0.06)
     ), 0);
     return {
       ...noMatch,
