@@ -348,10 +348,10 @@ video,
 /* Live set-code read zone: focused on the lower-right area used by buildSetCodeOcrVariants(). */
 .setcode-zone {
   position: absolute;
-  left: 52%;
-  top: 64%;
-  width: 45%;
-  height: 11%;
+  left: 49%;
+  top: 63%;
+  width: 48%;
+  height: 12%;
   box-sizing: border-box;
   border: 2px dashed rgba(56, 189, 248, 0.98);
   border-radius: 8px;

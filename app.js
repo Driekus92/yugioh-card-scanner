@@ -545,12 +545,12 @@
     // met één bredere fallback voor uitzonderlijke layouts.
     const regions = [
       // Primaire zone: set-code staat direct onder de illustratie, rechts.
-      { x: 0.54, y: 0.655, width: 0.43, height: 0.085, targetWidth: 2400, binary: false, psm: '7' },
-      { x: 0.60, y: 0.675, width: 0.36, height: 0.075, targetWidth: 2600, binary: true, psm: '7' },
-      { x: 0.48, y: 0.64, width: 0.49, height: 0.11, targetWidth: 2400, binary: false, psm: '11' },
-      { x: 0.66, y: 0.645, width: 0.30, height: 0.10, targetWidth: 2400, binary: false, psm: '6' },
+      { x: 0.51, y: 0.645, width: 0.46, height: 0.10, targetWidth: 2400, binary: false, psm: '7' },
+      { x: 0.57, y: 0.665, width: 0.40, height: 0.085, targetWidth: 2600, binary: true, psm: '7' },
+      { x: 0.46, y: 0.63, width: 0.53, height: 0.13, targetWidth: 2400, binary: false, psm: '11' },
+      { x: 0.63, y: 0.64, width: 0.33, height: 0.11, targetWidth: 2400, binary: false, psm: '6' },
       // Kleine verticale variatie voor foto's waarbij de kaart iets verschoven staat.
-      { x: 0.52, y: 0.69, width: 0.45, height: 0.08, targetWidth: 2500, binary: true, psm: '7' },
+      { x: 0.49, y: 0.69, width: 0.48, height: 0.09, targetWidth: 2500, binary: true, psm: '7' },
       { x: 0.42, y: 0.62, width: 0.55, height: 0.14, targetWidth: 2200, binary: false, psm: '11' }
     ];
     return regions.map(region => ({
