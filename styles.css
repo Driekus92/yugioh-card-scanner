@@ -782,6 +782,49 @@ tbody td {
   color: #9bb1d1;
 }
 
+
+.setcode-choices {
+  display: grid;
+  gap: 10px;
+  margin: 0 0 16px;
+}
+
+.setcode-choices.hidden {
+  display: none;
+}
+
+.setcode-choice {
+  width: 100%;
+  min-height: 54px;
+  padding: 12px 16px;
+  border: 2px solid rgba(255, 255, 255, 0.14);
+  border-radius: 14px;
+  background: rgba(255, 255, 255, 0.06);
+  color: #eef3ff;
+  font-size: 1.15rem;
+  font-weight: 800;
+  font-family: monospace;
+  letter-spacing: 0.04em;
+  text-align: center;
+  cursor: pointer;
+  transition: transform 120ms ease, border-color 120ms ease, background 120ms ease, box-shadow 120ms ease;
+}
+
+.setcode-choice:hover {
+  transform: translateY(-1px);
+  background: rgba(255, 255, 255, 0.1);
+}
+
+.setcode-choice.selected {
+  border-color: rgba(100, 180, 255, 0.85);
+  background: rgba(100, 180, 255, 0.16);
+  box-shadow: 0 0 0 3px rgba(100, 180, 255, 0.12);
+}
+
+.manual-set-input-label {
+  margin-top: 2px;
+}
+
 /* Manual Set Code Modal */
 .modal-overlay {
   position: fixed;

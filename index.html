@@ -108,7 +108,8 @@
           <div class="modal-content" tabindex="-1">
             <h3 id="manualSetTitle">Set-code invoeren</h3>
             <p id="manualSetDescription">De set-code kon niet betrouwbaar worden gelezen. Vul deze handmatig in.</p>
-            <label for="manualSetInput">Set-code</label>
+            <div id="setCodeChoices" class="setcode-choices" role="radiogroup" aria-label="Mogelijke set-codes"></div>
+            <label for="manualSetInput" class="manual-set-input-label">Set-code handmatig invoeren</label>
             <input id="manualSetInput" type="text" inputmode="text" autocomplete="off" autocapitalize="characters" spellcheck="false" enterkeyhint="done" placeholder="Bijvoorbeeld LOB-001" aria-required="true" aria-invalid="false" aria-describedby="manualSetHint manualSetError" />
             <small id="manualSetHint" class="field-hint">De code staat meestal rechts onder de afbeelding op de kaart.</small>
             <p id="manualSetError" class="field-error" role="alert" aria-live="assertive"></p>

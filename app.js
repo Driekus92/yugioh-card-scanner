@@ -47,6 +47,7 @@
     manualSetModal: document.getElementById('manualSetModal'),
     manualSetDescription: document.getElementById('manualSetDescription'),
     manualSetInput: document.getElementById('manualSetInput'),
+    setCodeChoices: document.getElementById('setCodeChoices'),
     manualSetError: document.getElementById('manualSetError'),
     manualSetConfirm: document.getElementById('manualSetConfirm'),
     manualSetCancel: document.getElementById('manualSetCancel')
@@ -854,6 +855,61 @@
     setScanButtonMode('resume', 'Volgende kaart');
   }
 
+  function collectSetCodeChoices(context) {
+    const values = [];
+    const add = value => {
+      const normalized = Core ? Core.normalizeSetCode(value) : String(value || '').trim().toUpperCase();
+      if (!normalized || values.includes(normalized)) return;
+      values.push(normalized);
+    };
+    (context.setCandidates || []).forEach(add);
+    (context.cards || []).forEach(card => {
+      (Array.isArray(card?.card_sets) ? card.card_sets : []).forEach(printing => {
+        add(printing?.set_code || printing?.setCode || '');
+      });
+    });
+    return values.slice(0, 8);
+  }
+
+  function renderSetCodeChoices(context) {
+    if (!elements.setCodeChoices) return;
+    elements.setCodeChoices.innerHTML = '';
+    const choices = collectSetCodeChoices(context);
+    if (!choices.length) {
+      elements.setCodeChoices.classList.add('hidden');
+      elements.setCodeChoices.removeAttribute('aria-label');
+      return;
+    }
+    elements.setCodeChoices.classList.remove('hidden');
+    choices.forEach((code, index) => {
+      const button = document.createElement('button');
+      button.type = 'button';
+      button.className = 'setcode-choice';
+      button.dataset.setCode = code;
+      button.setAttribute('role', 'radio');
+      button.setAttribute('aria-checked', index === 0 ? 'true' : 'false');
+      button.textContent = code;
+      button.addEventListener('click', () => {
+        elements.setCodeChoices.querySelectorAll('.setcode-choice').forEach(other => {
+          const selected = other === button;
+          other.classList.toggle('selected', selected);
+          other.setAttribute('aria-checked', selected ? 'true' : 'false');
+        });
+        if (elements.manualSetInput) {
+          elements.manualSetInput.value = code;
+          elements.manualSetInput.setAttribute('aria-invalid', 'false');
+        }
+        if (elements.manualSetError) elements.manualSetError.textContent = '';
+      });
+      elements.setCodeChoices.appendChild(button);
+    });
+    const first = elements.setCodeChoices.querySelector('.setcode-choice');
+    if (first && !elements.manualSetInput.value) {
+      first.classList.add('selected');
+      if (elements.manualSetInput) elements.manualSetInput.value = first.dataset.setCode || '';
+    }
+  }
+
   function showManualSetModal(context, message) {
     pendingManualMatch = context;
     if (!elements.manualSetModal || !elements.manualSetInput) {
@@ -861,6 +917,7 @@
     }
     const suggested = context.setCandidates && context.setCandidates[0] || '';
     elements.manualSetInput.value = suggested;
+    renderSetCodeChoices(context);
     elements.manualSetInput.setAttribute('aria-invalid', 'false');
     if (elements.manualSetError) elements.manualSetError.textContent = '';
     if (elements.manualSetDescription) {
@@ -883,6 +940,12 @@
     if (elements.manualSetModal) elements.manualSetModal.classList.add('hidden');
     if (elements.manualSetInput) {
       elements.manualSetInput.value = '';
+      if (elements.setCodeChoices) {
+        elements.setCodeChoices.querySelectorAll('.setcode-choice').forEach(button => {
+          button.classList.remove('selected');
+          button.setAttribute('aria-checked', 'false');
+        });
+      }
       elements.manualSetInput.setAttribute('aria-invalid', 'false');
     }
     if (elements.manualSetError) elements.manualSetError.textContent = '';
